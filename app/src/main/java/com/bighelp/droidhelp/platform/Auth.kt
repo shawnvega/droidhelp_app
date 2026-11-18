@@ -11,6 +11,7 @@ import java.util.Base64
 class Auth(private val secureStorage: SecureStorage) {
     companion object {
         private const val VERIFIER_KEY = "pkce_code_verifier"
+        private const val STATE_KEY = "oauth_state"
     }
 
     /**
@@ -57,5 +58,37 @@ class Auth(private val secureStorage: SecureStorage) {
      */
     suspend fun clearVerifier() {
         secureStorage.delete(VERIFIER_KEY)
+    }
+
+    /**
+     * Generates a cryptographically random [state] token and stores it in [secureStorage].
+     * The token has at least 128 bits of entropy and is URL-safe encoded.
+     * This is used for CSRF protection during OAuth flows.
+     *
+     * @return The generated [state] string.
+     */
+    suspend fun generateAndSaveState(): String {
+        val bytes = ByteArray(16) // 128 bits
+        SecureRandom().nextBytes(bytes)
+        val state = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+        secureStorage.saveString(STATE_KEY, state)
+        return state
+    }
+
+    /**
+     * Validates the provided [receivedState] against the stored state.
+     * If they match, the stored state is cleared and true is returned.
+     * This prevents CSRF attacks by ensuring the response matches the request.
+     *
+     * @param receivedState The state token received from the OAuth callback.
+     * @return True if the state matches and was successfully validated, false otherwise.
+     */
+    suspend fun validateAndClearState(receivedState: String): Boolean {
+        val storedState = secureStorage.getString(STATE_KEY)
+        if (storedState != null && storedState == receivedState) {
+            secureStorage.delete(STATE_KEY)
+            return true
+        }
+        return false
     }
 }

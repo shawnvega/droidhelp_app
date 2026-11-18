@@ -78,4 +78,44 @@ class AuthTest {
         
         assertNull(storage.getString("pkce_code_verifier"))
     }
+
+    @Test
+    fun testGenerateAndSaveState() = runTest {
+        val storage = FakeSecureStorage()
+        val auth = Auth(storage)
+        
+        val state = auth.generateAndSaveState()
+        
+        assertTrue(state.isNotEmpty())
+        // Check if it's URL safe (no + or /)
+        assertFalse(state.contains("+"))
+        assertFalse(state.contains("/"))
+        assertEquals(state, storage.getString("oauth_state"))
+    }
+
+    @Test
+    fun testValidateAndClearStateSuccess() = runTest {
+        val storage = FakeSecureStorage()
+        val auth = Auth(storage)
+        
+        val state = auth.generateAndSaveState()
+        
+        val isValid = auth.validateAndClearState(state)
+        
+        assertTrue(isValid)
+        assertNull(storage.getString("oauth_state"))
+    }
+
+    @Test
+    fun testValidateAndClearStateFailure() = runTest {
+        val storage = FakeSecureStorage()
+        val auth = Auth(storage)
+        
+        val state = auth.generateAndSaveState()
+        
+        val isValid = auth.validateAndClearState("wrong_state")
+        
+        assertFalse(isValid)
+        assertEquals(state, storage.getString("oauth_state"))
+    }
 }
