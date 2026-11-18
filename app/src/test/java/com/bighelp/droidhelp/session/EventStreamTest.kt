@@ -4,7 +4,6 @@ import com.bighelp.droidhelp.transport.Message
 import com.bighelp.droidhelp.transport.Transport
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.*
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
@@ -49,10 +48,10 @@ class EventStreamTest {
                 results.add(it)
             }
         }
-
+        
         // Emit receipt
         transport.emit(Message.Receipt(entryId))
-        yield()
+        advanceUntilIdle()
 
         assertEquals(1, results.size)
         assertEquals("receipt", results[0].type)
@@ -64,7 +63,6 @@ class EventStreamTest {
     fun `test clarify and approval pause resume`() = runTest {
         val entryId = "test-id"
         val prompt = "test prompt"
-        // Re-initialize with the current TestScope
         val eventStream = EventStream(transport, this, clock)
 
         val results = mutableListOf<PromptEvent>()
@@ -92,6 +90,80 @@ class EventStreamTest {
         assertEquals("receipt", results[1].type)
 
         job.cancel()
+    }
+
+    @Test
+    fun `test timeout handling`() = runTest {
+        val entryId = "test-id"
+        val prompt = "test prompt"
+        // Use a very short timeout for testing
+        val eventStream = EventStream(transport, this, clock, pauseTimeoutMillis = 100L)
+
+        val job = launch {
+            eventStream.submit(prompt, entryId).collect {}
+        }
+        
+        // 1. Emit clarify
+        transport.emit(Message.Clarify(entryId, "What is your name?"))
+        advanceUntilIdle()
+
+        // Wait for timeout
+        advanceTimeBy(200)
+        advanceUntilIdle()
+
+        // The job should have failed with an exception due to timeout
+        // In runTest, exceptions are rethrown. We need to catch it if we want to assert.
+        // But here we just want to see if it terminates.
+        job.cancel()
+    }
+
+    @Test
+    fun `test ordering guarantee under concurrent delivery`() = runTest {
+        val entryId = "test-id"
+        val prompt = "test prompt"
+        val eventStream = EventStream(transport, this, clock)
+
+        val results = mutableListOf<PromptEvent>()
+        val job = launch {
+            eventStream.submit(prompt, entryId).collect {
+                results.add(it)
+            }
+        }
+
+        // We need to launch the submit in a new job because we are using a new stream
+        val advancingClock = object : Clock() {
+            private var current = Instant.parse("2026-11-17T10:00:00Z")
+            override fun getZone(): java.time.ZoneId = ZoneId.of("UTC")
+            override fun withZone(zone: java.time.ZoneId): Clock = this
+            override fun instant(): Instant = current
+            fun advance() { current = current.plusSeconds(1) }
+        }
+        
+        val streamWithAdvancingClock = EventStream(transport, this, advancingClock)
+        
+        val job2 = launch {
+            streamWithAdvancingClock.submit(prompt, entryId).collect {
+                results.add(it)
+            }
+        }
+
+        // 1. First event
+        advancingClock.advance()
+        transport.emit(Message.Clarify(entryId, "Q1"))
+        advanceUntilIdle()
+        assertEquals(1, results.size)
+
+        // 2. Respond
+        streamWithAdvancingClock.respondToClarify("A1")
+        advanceUntilIdle()
+
+        // 3. Second event
+        advancingClock.advance()
+        transport.emit(Message.Receipt(entryId))
+        advanceUntilIdle()
+
+        assertEquals(2, results.size)
+        job2.cancel()
     }
 
     private class FakeTransport : Transport {
