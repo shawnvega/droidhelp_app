@@ -28,7 +28,7 @@ interface SessionRepository {
 /**
  * Base type for all session-related failures.
  */
-sealed class SessionException(message: String) : Exception(message)
+open class SessionException(message: String) : Exception(message)
 
 /**
  * Thrown when no stored session exists for the requested ID.
