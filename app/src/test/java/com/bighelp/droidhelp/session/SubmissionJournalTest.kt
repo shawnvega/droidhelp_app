@@ -69,6 +69,14 @@ class SubmissionJournalTest {
         val uncertain2 = journal.markUncertain(dispatched.id, "reason-2")
         assertEquals(State.UNCERTAIN, uncertain2.state)
         assertEquals("reason-2", uncertain2.metadata?.get("reason"))
+
+        // From ACKNOWLEDGED
+        val acknowledged = journal.prepare("intent-3")
+        journal.dispatch(acknowledged.id)
+        journal.acknowledge(acknowledged.id)
+        val uncertain3 = journal.markUncertain(acknowledged.id, "reason-3")
+        assertEquals(State.UNCERTAIN, uncertain3.state)
+        assertEquals("reason-3", uncertain3.metadata?.get("reason"))
     }
 
     @Test

@@ -20,7 +20,7 @@ data class Entry(
     val id: String,
     val intent: String,
     val state: State,
-    val timestamp: String,
+    val timestamp: Instant,
     val metadata: Map<String, String>? = null
 ) {
     fun toCsv(): String {
@@ -37,7 +37,7 @@ data class Entry(
                     kv[0] to kv[1]
                 }
             } else null
-            return Entry(parts[0], parts[1], State.valueOf(parts[2]), parts[3], meta)
+            return Entry(parts[0], parts[1], State.valueOf(parts[2]), Instant.parse(parts[3]), meta)
         }
     }
 }
@@ -85,7 +85,7 @@ class SubmissionJournal(
             id = UUID.randomUUID().toString(),
             intent = intent,
             state = State.PREPARED,
-            timestamp = Instant.now().toString(),
+            timestamp = Instant.now(),
             metadata = null
         )
         entries[entry.id] = entry
@@ -100,7 +100,7 @@ class SubmissionJournal(
         }
         val updatedEntry = entry.copy(
             state = State.DISPATCHED,
-            timestamp = Instant.now().toString()
+            timestamp = Instant.now(),
         )
         entries[entryId] = updatedEntry
         save()
@@ -114,7 +114,7 @@ class SubmissionJournal(
         }
         val updatedEntry = entry.copy(
             state = State.ACKNOWLEDGED,
-            timestamp = Instant.now().toString()
+            timestamp = Instant.now(),
         )
         entries[entryId] = updatedEntry
         save()
@@ -126,7 +126,7 @@ class SubmissionJournal(
         val updatedMetadata = (entry.metadata ?: emptyMap()) + ("reason" to reason)
         val updatedEntry = entry.copy(
             state = State.UNCERTAIN,
-            timestamp = Instant.now().toString(),
+            timestamp = Instant.now(),
             metadata = updatedMetadata
         )
         entries[entryId] = updatedEntry
