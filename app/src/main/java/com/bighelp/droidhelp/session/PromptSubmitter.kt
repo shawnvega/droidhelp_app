@@ -1,59 +1,39 @@
 package com.bighelp.droidhelp.session
 
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
-import java.time.Instant
 import java.util.UUID
-
-/**
- * Represents a single event in the prompt submission stream.
- */
-data class PromptEvent(
-    val id: String,
-    val type: String,
-    val content: String,
-    val timestamp: Instant,
-    val metadata: Map<String, String>? = null
-)
-
-/**
- * Interface for the streaming client that handles prompt submission.
- *
- * Implementations submit a prompt into the processing pipeline and emit a stream of
- * [PromptEvent]s in the order they are produced by the stream.
- */
-interface StreamingClient {
-    suspend fun submit(prompt: String, entryId: String): Flow<PromptEvent>
-}
 
 /**
  * PromptSubmitter handles the submission of a text-turn user prompt through the session pipeline.
  *
- * It journals the prompt to the session journal before submission, submits the prompt into the
- * processing pipeline, treats the streaming receipt as the admission signal, and consumes the
- * resulting ordered events in sequence.
- *
- * The prompt is only considered admitted once the stream acknowledges it (the receipt event).
- * Callers can await/inspect admission by collecting the returned flow — the first event of type
- * "receipt" signals admission.
+ * @param journal The submission journal for persistence.
+ * @param streamingClient The streaming client for handling the event stream.
+ * @param secureInput The store for secure prompt values.
  */
 class PromptSubmitter(
     private val journal: SubmissionJournal,
-    private val streamingClient: StreamingClient
+    private val streamingClient: StreamingClient,
+    private val secureInput: SecureInput
 ) {
+
+    /**
+     * Submits a secure prompt using a value from the [secureInput] store.
+     *
+     * @param id The ID of the secure input.
+     * @return A Flow of [PromptEvent] in the order they are emitted by the stream.
+     */
+    suspend fun submitSecure(id: String): Flow<PromptEvent> {
+        val value = secureInput.get(id) ?: throw SessionException("Secure input not found for ID: $id")
+        return submit(value)
+    }
 
     /**
      * Submits a text-turn user prompt through the session pipeline.
      *
      * @param prompt The user prompt to submit.
      * @return A Flow of [PromptEvent] in the order they are emitted by the stream.
-     *
-     * The flow journals the prompt before submission, then submits it into the processing
-     * pipeline. The first event of type "receipt" is treated as the admission signal: the
-     * journal entry is acknowledged only after the receipt is received. All subsequent events
-     * are emitted in their original order without reordering or dropping.
      */
-    suspend fun submit(prompt: String): Flow<PromptEvent> = flow {
+    suspend fun submit(prompt: String): Flow<PromptEvent> = kotlinx.coroutines.flow.flow {
         // 1. Journal the prompt before submission
         val entry = journal.prepare(prompt)
         journal.dispatch(entry.id)
@@ -74,7 +54,7 @@ class PromptSubmitter(
 
         // If no receipt was received, mark the entry as uncertain
         if (!receiptReceived) {
-            journal.markUncertain(entry.id, "No receipt received")
+            journal.markUncertain(entry.id, "No receipt was received")
         }
     }
 

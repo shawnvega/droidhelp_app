@@ -87,6 +87,7 @@ class SessionCoordinator(private val repository: SessionRepository) {
      * via the repository and returned with its generated ID.
      */
     suspend fun create(source: String, profile: String): Session = mutex.withLock {
+        SecureInput.bind(profile)
         val session = Session(
             id = UUID.randomUUID().toString(),
             source = SOURCE,
@@ -109,6 +110,8 @@ class SessionCoordinator(private val repository: SessionRepository) {
     suspend fun resume(id: String): Session = mutex.withLock {
         val session = repository.findById(id)
             ?: throw SessionNotFoundException(id)
+        
+        SecureInput.bind(session.profile)
 
         val runtimeErrors = validateRuntime(session)
         val storedErrors = validateStored(session, requestedId = id)
