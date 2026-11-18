@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.nio.file.Path
+import java.time.Instant
 
 class SubmissionJournalTest {
 
@@ -28,7 +29,7 @@ class SubmissionJournalTest {
     @Test
     fun `test successful state transitions`() = runBlocking {
         val intent = "test-intent"
-        val entry = journal.prepare(intent)
+        val entry = journal.appendIntent(intent)
         assertEquals(State.PREPARED, entry.state)
         assertEquals(intent, entry.intent)
 
@@ -40,9 +41,32 @@ class SubmissionJournalTest {
     }
 
     @Test
-    fun `test invalid state transitions`() = runBlocking {
-        val entry = journal.prepare("test-intent")
+    fun `test append history`() = runBlocking {
+        val history = "some history event"
+        val entry = journal.appendHistory(history)
+        assertEquals(State.HISTORY, entry.state)
+        assertEquals(history, entry.intent)
 
+        val retrieved = journal.get(entry.id)
+        assertNotNull(retrieved)
+        assertEquals(history, retrieved?.intent)
+    }
+
+    @Test
+    fun `test append intent`() = runBlocking {
+        val intent = "test-intent"
+        val entry = journal.appendIntent(intent)
+        assertEquals(State.PREPARED, entry.state)
+        assertEquals(intent, entry.intent)
+
+        val retrieved = journal.get(entry.id)
+        assertNotNull(retrieved)
+        assertEquals(intent, retrieved?.intent)
+    }
+
+    @Test
+    fun `test invalid state transitions`() = runBlocking {
+        val entry = journal.appendIntent("test-intent")
         // Cannot acknowledge directly from PREPARED
         assertThrows(IllegalStateTransitionException::class.java) {
             runBlocking { journal.acknowledge(entry.id) }
@@ -58,20 +82,20 @@ class SubmissionJournalTest {
     @Test
     fun `test mark uncertain from any state`() = runBlocking {
         // From PREPARED
-        val prepared = journal.prepare("intent-1")
+        val prepared = journal.appendIntent("intent-1")
         val uncertain1 = journal.markUncertain(prepared.id, "reason-1")
         assertEquals(State.UNCERTAIN, uncertain1.state)
         assertEquals("reason-1", uncertain1.metadata?.get("reason"))
 
         // From DISPATCHED
-        val dispatched = journal.prepare("intent-2")
+        val dispatched = journal.appendIntent("intent-2")
         journal.dispatch(dispatched.id)
         val uncertain2 = journal.markUncertain(dispatched.id, "reason-2")
         assertEquals(State.UNCERTAIN, uncertain2.state)
         assertEquals("reason-2", uncertain2.metadata?.get("reason"))
 
         // From ACKNOWLEDGED
-        val acknowledged = journal.prepare("intent-3")
+        val acknowledged = journal.appendIntent("intent-3")
         journal.dispatch(acknowledged.id)
         journal.acknowledge(acknowledged.id)
         val uncertain3 = journal.markUncertain(acknowledged.id, "reason-3")
@@ -82,13 +106,12 @@ class SubmissionJournalTest {
     @Test
     fun `test persistence`() = runBlocking {
         val intent = "persistent-intent"
-        val entry = journal.prepare(intent)
+        val entry = journal.appendIntent(intent)
         journal.dispatch(entry.id)
 
         // Create a new journal instance pointing to the same file
         val newJournal = SubmissionJournal(storageFile)
         val retrievedEntry = newJournal.get(entry.id)
-
         assertNotNull(retrievedEntry)
         assertEquals(entry.id, retrievedEntry?.id)
         assertEquals(State.DISPATCHED, retrievedEntry?.state)
@@ -97,10 +120,10 @@ class SubmissionJournalTest {
 
     @Test
     fun `test query by state`() = runBlocking {
-        journal.prepare("intent-1")
-        val entry2 = journal.prepare("intent-2")
+        journal.appendIntent("intent-1")
+        val entry2 = journal.appendIntent("intent-2")
         journal.dispatch(entry2.id)
-        val entry3 = journal.prepare("intent-3")
+        val entry3 = journal.appendIntent("intent-3")
         journal.markUncertain(entry3.id, "uncertain-reason")
 
         val preparedEntries = journal.query(State.PREPARED)
@@ -124,7 +147,7 @@ class SubmissionJournalTest {
         val numConcurrent = 50
         val jobs = (1..numConcurrent).map { i ->
             async(Dispatchers.Default) {
-                val entry = journal.prepare("intent-$i")
+                val entry = journal.appendIntent("intent-$i")
                 journal.dispatch(entry.id)
             }
         }
