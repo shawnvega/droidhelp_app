@@ -107,15 +107,52 @@ class AuthTest {
     }
 
     @Test
-    fun testValidateAndClearStateFailure() = runTest {
+    fun testSaveAndGetTokens() = runTest {
         val storage = FakeSecureStorage()
         val auth = Auth(storage)
         
-        val state = auth.generateAndSaveState()
+        auth.saveTokens("access_123", "refresh_456")
         
-        val isValid = auth.validateAndClearState("wrong_state")
+        assertEquals("access_123", auth.getAccessToken())
+        assertEquals("refresh_456", auth.getRefreshToken())
+    }
+
+    @Test
+    fun testClearTokens() = runTest {
+        val storage = FakeSecureStorage()
+        val auth = Auth(storage)
         
-        assertFalse(isValid)
-        assertEquals(state, storage.getString("oauth_state"))
+        auth.saveTokens("access_123", "refresh_456")
+        auth.clearTokens()
+        
+        assertNull(auth.getAccessToken())
+        assertNull(auth.getRefreshToken())
+    }
+
+    @Test
+    fun testRotateTokensSuccess() = runTest {
+        val storage = FakeSecureStorage()
+        val auth = Auth(storage)
+        
+        auth.saveTokens("access_old", "refresh_old")
+        
+        auth.rotateTokens("refresh_old", "access_new", "refresh_new")
+        
+        assertEquals("access_new", auth.getAccessToken())
+        assertEquals("refresh_new", auth.getRefreshToken())
+    }
+
+    @Test
+    fun testRotateTokensReuseDetected() = runTest {
+        val storage = FakeSecureStorage()
+        val auth = Auth(storage)
+        
+        auth.saveTokens("access_old", "refresh_old")
+        
+        assertThrows(Auth.TokenReuseException::class.java) {
+            runTest {
+                auth.rotateTokens("refresh_wrong", "access_new", "refresh_new")
+            }
+        }
     }
 }
