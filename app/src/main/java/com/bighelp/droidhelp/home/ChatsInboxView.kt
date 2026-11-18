@@ -5,10 +5,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -21,6 +21,7 @@ import com.bighelp.droidhelp.home.model.*
 import java.text.SimpleDateFormat
 import java.util.*
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatsInboxView(
     rows: List<ChatsInboxRow>,
@@ -81,10 +82,11 @@ fun ChatsInboxView(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
             placeholder = { Text("Search chats") },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-            colors = TextFieldDefaults.textFieldColors(backgroundColor = Color.Transparent)
+            colors = TextFieldDefaults.colors(),
+            singleLine = true
         )
 
-        // Filter Chips
+        // Filter Chips Row
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -107,12 +109,12 @@ fun ChatsInboxView(
                     Text(
                         text = section.kind.name.lowercase().replaceFirstChar { it.uppercase() },
                         modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 8.dp),
-                        style = MaterialTheme.typography.subtitle2.copy(fontWeight = FontWeight.Bold, color = Color.Gray)
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, color = Color.Gray)
                     )
                 }
                 items(section.rows) { row ->
                     ChatRow(row, onChatClick)
-                    Divider(modifier = Modifier.padding(start = 56.dp))
+                    HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
                 }
             }
         }
@@ -142,7 +144,7 @@ fun ChatRow(row: ChatsInboxRow, onClick: (ChatsInboxRow) -> Unit) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = row.title,
-                    style = MaterialTheme.typography.subtitle1.copy(
+                    style = MaterialTheme.typography.titleMedium.copy(
                         fontWeight = if (row.isUnread) FontWeight.Bold else FontWeight.Medium
                     ),
                     modifier = Modifier.weight(1f),
@@ -154,7 +156,7 @@ fun ChatRow(row: ChatsInboxRow, onClick: (ChatsInboxRow) -> Unit) {
                 }
                 Text(
                     text = SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(row.updatedAt),
-                    style = MaterialTheme.typography.caption,
+                    style = MaterialTheme.typography.labelSmall,
                     color = Color.Gray,
                     modifier = Modifier.padding(start = 8.dp)
                 )
@@ -165,24 +167,11 @@ fun ChatRow(row: ChatsInboxRow, onClick: (ChatsInboxRow) -> Unit) {
             }
             Text(
                 text = row.preview,
-                style = MaterialTheme.typography.body2,
+                style = MaterialTheme.typography.bodyMedium,
                 color = Color.Gray,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-        }
-    }
-}
-
-@Composable
-fun FilterChip(selected: Boolean, onClick: () -> Unit, label: @Composable () -> Unit) {
-    Surface(
-        shape = androidx.compose.foundation.shape.CircleShape,
-        color = if (selected) Color.LightGray.copy(alpha = 0.3f) else Color.Transparent,
-        onClick = onClick
-    ) {
-        Box(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-            label()
         }
     }
 }

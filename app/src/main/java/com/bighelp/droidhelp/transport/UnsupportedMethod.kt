@@ -24,6 +24,7 @@ fun rejectUnsupported(transport: Transport, message: Message) {
         is Message.CapabilitiesRequest -> "CapabilitiesRequest"
         is Message.CapabilitiesResponse -> "CapabilitiesResponse"
         is UnsupportedMethod -> "UnsupportedMethod"
+        else -> "Unknown"
     }
     transport.send(unsupportedMethod(methodName))
 }
