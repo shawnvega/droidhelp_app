@@ -24,6 +24,8 @@ class CapabilitiesClient(
         transport.onMessage { message ->
             if (message is Message.CapabilitiesRequest) {
                 handleCapabilitiesRequest(message)
+            } else {
+                rejectUnsupported(transport, message)
             }
         }
     }

@@ -2,7 +2,6 @@
 agp = "8.7.0"
 kotlin = "2.1.10"
 composeBom = "2024.12.01"
-composeCompiler = "2.0.20"
 navigationCompose = "2.8.5"
 lifecycle = "2.8.7"
 coroutines = "1.9.0"
@@ -31,4 +30,4 @@ okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhtt
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
-compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "composeCompiler" }
+compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
