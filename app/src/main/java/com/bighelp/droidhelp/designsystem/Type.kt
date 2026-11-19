@@ -95,6 +95,13 @@ object Typography {
         lineHeight = 20.sp
     )
 
+    val BodySmall: TextStyle = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Normal,
+        fontSize = 12.sp,
+        lineHeight = 16.sp
+    )
+
     // Label styles — small, supporting text
     val LabelLarge: TextStyle = TextStyle(
         fontFamily = FontFamily.SansSerif,

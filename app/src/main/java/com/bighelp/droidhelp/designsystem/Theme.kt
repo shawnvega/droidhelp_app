@@ -97,6 +97,7 @@ fun Theme(
         titleSmall = Typography.TitleSmall,
         bodyLarge = Typography.BodyLarge,
         bodyMedium = Typography.BodyMedium,
+        bodySmall = Typography.BodySmall,
         labelLarge = Typography.LabelLarge,
         labelMedium = Typography.LabelMedium,
         labelSmall = Typography.LabelSmall
