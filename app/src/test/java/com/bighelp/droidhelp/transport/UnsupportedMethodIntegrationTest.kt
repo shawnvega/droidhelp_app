@@ -4,7 +4,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.test.TestScope
+import com.bighelp.droidhelp.session.Session
 
 class UnsupportedMethodIntegrationTest {
 
@@ -19,6 +19,8 @@ class UnsupportedMethodIntegrationTest {
         override fun onMessage(callback: (Message) -> Unit) {
             onMessageCallback = callback
         }
+
+        override fun resumeSession(session: Session) {}
 
         fun simulateIncoming(message: Message) {
             onMessageCallback?.invoke(message)

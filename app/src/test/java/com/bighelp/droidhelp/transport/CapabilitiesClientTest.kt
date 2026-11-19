@@ -2,6 +2,7 @@ package com.bighelp.droidhelp.transport
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
+import com.bighelp.droidhelp.session.Session
 
 class CapabilitiesClientTest {
 
@@ -16,6 +17,8 @@ class CapabilitiesClientTest {
         override fun onMessage(callback: (Message) -> Unit) {
             onMessageCallback = callback
         }
+
+        override fun resumeSession(session: Session) {}
 
         fun simulateIncoming(message: Message) {
             onMessageCallback?.invoke(message)

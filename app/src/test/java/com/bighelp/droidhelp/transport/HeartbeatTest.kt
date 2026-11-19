@@ -6,6 +6,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import com.bighelp.droidhelp.session.Session
 
 class HeartbeatTest {
 
@@ -20,6 +21,8 @@ class HeartbeatTest {
         override fun onMessage(callback: (Message) -> Unit) {
             onMessageCallback = callback
         }
+
+        override fun resumeSession(session: Session) {}
 
         fun simulateIncoming(message: Message) {
             onMessageCallback?.invoke(message)
