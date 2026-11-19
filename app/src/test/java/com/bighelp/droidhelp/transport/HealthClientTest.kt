@@ -4,6 +4,7 @@ import kotlinx.coroutines.test.runTest
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.SocketPolicy
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -83,6 +84,36 @@ class HealthClientTest {
     }
 
     @Test
+    fun `getHealth throws exception when gateway is missing`() = runTest {
+        val jsonResponse = """
+            {
+                "capabilities": {
+                    "per_session_exclusive_submit": true
+                }
+            }
+        """.trimIndent()
+        server.enqueue(MockResponse().setBody(jsonResponse).setResponseCode(200))
+
+        assertThrows(IOException::class.java) {
+            kotlinx.coroutines.runBlocking { client.getHealth() }
+        }
+    }
+
+    @Test
+    fun `getHealth throws exception when capabilities is missing`() = runTest {
+        val jsonResponse = """
+            {
+                "gateway": {}
+            }
+        """.trimIndent()
+        server.enqueue(MockResponse().setBody(jsonResponse).setResponseCode(200))
+
+        assertThrows(IOException::class.java) {
+            kotlinx.coroutines.runBlocking { client.getHealth() }
+        }
+    }
+
+    @Test
     fun `getHealth throws exception on HTTP error`() = runTest {
         server.enqueue(MockResponse().setResponseCode(500))
 
@@ -95,6 +126,15 @@ class HealthClientTest {
     fun `getHealth throws exception on malformed JSON`() = runTest {
         val malformedJson = """{"gateway": {"capabilities": { "key1": }}}"""
         server.enqueue(MockResponse().setBody(malformedJson).setResponseCode(200))
+
+        assertThrows(IOException::class.java) {
+            kotlinx.coroutines.runBlocking { client.getHealth() }
+        }
+    }
+
+    @Test
+    fun `getHealth throws exception on network error`() = runTest {
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START))
 
         assertThrows(IOException::class.java) {
             kotlinx.coroutines.runBlocking { client.getHealth() }
