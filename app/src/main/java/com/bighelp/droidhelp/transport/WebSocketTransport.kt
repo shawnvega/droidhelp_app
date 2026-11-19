@@ -4,10 +4,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.Channel.Factory.CONFLATED
 import kotlinx.coroutines.channels.ReceiveChannel
-import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.channels.produce
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -23,17 +20,6 @@ import java.lang.Exception
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
-/**
- * WebSocket transport implementation for connecting to /api/ws.
- * Handles JSON frames, headers, bounded decode, outbound queue, and correlator stub.
- *
- * @param scope Coroutine scope for launching WebSocket operations
- * @param endpoint The WebSocket endpoint to connect to
- * @param headers Additional HTTP headers for the WebSocket connection
- * @param json Json serializer/deserializer for JSON frames
- * @param maxFrameSize Maximum size of incoming frames (bytes)
- * @param maxQueueSize Maximum size of outbound message queue
- */
 class WebSocketTransport(
     private val scope: CoroutineScope,
     private val endpoint: Endpoint,
@@ -53,6 +39,7 @@ class WebSocketTransport(
 
     // Message handling
     private val _incomingMessages = MutableStateFlow<Message?>(null)
+    private val incomingChannel = Channel<Any>(Channel.BUFFERED)
 
     // Outbound message queue
     private val outboundQueue: Channel<Message> = Channel(maxQueueSize)
@@ -75,7 +62,7 @@ class WebSocketTransport(
         }
     }
 
-    /**
+    /** 
      * Connects to the WebSocket endpoint.
      * @return true if connection successful, false otherwise
      */
@@ -108,7 +95,7 @@ class WebSocketTransport(
                     .writeTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
                     .build()
 
-                val response = client.newWebSocket(request, object : WebSocketListener() {
+                val listener = object : WebSocketListener() {
                     override fun onOpen(webSocket: WebSocket, response: Response) {
                         this@WebSocketTransport.webSocket = webSocket
                         isConnected = true
@@ -121,13 +108,13 @@ class WebSocketTransport(
 
                     override fun onMessage(webSocket: WebSocket, text: String) {
                         scope.launch {
-                            handleIncomingText(text)
+                            incomingChannel.trySend(text)
                         }
                     }
 
                     override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
                         scope.launch {
-                            handleIncomingBytes(bytes)
+                            incomingChannel.trySend(bytes)
                         }
                     }
 
@@ -148,11 +135,10 @@ class WebSocketTransport(
                         connectionError = t as? Exception ?: Exception(t)
                         scheduleReconnect()
                     }
-                })
+                }
 
-                // Keep the WebSocket reference for manual control
+                val response = client.newWebSocket(request, listener)
                 this@WebSocketTransport.webSocket = response
-
             } catch (e: Exception) {
                 connectionError = e
                 isConnecting = false
@@ -163,25 +149,22 @@ class WebSocketTransport(
         return true
     }
 
-    /**
+    /** 
      * Disconnects from the WebSocket.
      */
     fun disconnect() {
         isConnected = false
         isConnecting = false
-
         connectionJob?.cancel()
         reconnectJob?.cancel()
         connectionJob = null
         reconnectJob = null
-
         webSocket?.close(1000, "Normal closure")
         webSocket = null
-
         correlator.shutdown()
     }
 
-    /**
+    /** 
      * Sends a message through the WebSocket.
      * @param message The message to send
      */
@@ -199,7 +182,7 @@ class WebSocketTransport(
         }
     }
 
-    /**
+    /** 
      * Registers a callback for incoming messages.
      * @param callback The callback to invoke for each message
      */
@@ -216,7 +199,7 @@ class WebSocketTransport(
         }
     }
 
-    /**
+    /** 
      * Processes the outbound message queue.
      */
     private suspend fun processOutboundQueue() {
@@ -225,7 +208,7 @@ class WebSocketTransport(
         }
     }
 
-    /**
+    /** 
      * Handles incoming text messages (JSON frames).
      * @param text The JSON text
      */
@@ -245,7 +228,7 @@ class WebSocketTransport(
         }
     }
 
-    /**
+    /** 
      * Handles incoming binary messages (chunked frames).
      * @param bytes The binary data
      */
@@ -259,7 +242,7 @@ class WebSocketTransport(
         }
     }
 
-    /**
+    /** 
      * Schedules a reconnection attempt.
      */
     private fun scheduleReconnect() {
@@ -273,12 +256,12 @@ class WebSocketTransport(
         }
     }
 
-    /**
+    /** 
      * Receives messages from the WebSocket.
      */
     private suspend fun receiveMessages() {
         webSocket?.let { ws ->
-            for (message in ws.receiveChannel()) {
+            for (message in incomingChannel) {
                 when (message) {
                     is String -> handleIncomingText(message)
                     is ByteString -> handleIncomingBytes(message)
@@ -287,7 +270,7 @@ class WebSocketTransport(
         }
     }
 
-    /**
+    /** 
      * Generates a WebSocket key for the handshake.
      * @return The WebSocket key
      */
@@ -297,7 +280,7 @@ class WebSocketTransport(
         return android.util.Base64.encodeToString(random, android.util.Base64.NO_WRAP)
     }
 
-    /**
+    /** 
      * Registers a callback for a specific request ID.
      * @param requestId The request ID
      * @param callback The callback to invoke when a response is received
@@ -306,7 +289,7 @@ class WebSocketTransport(
         correlator.register(requestId, callback)
     }
 
-    /**
+    /** 
      * Cancels a pending request.
      * @param requestId The request ID to cancel
      */
@@ -314,7 +297,7 @@ class WebSocketTransport(
         correlator.cancel(requestId)
     }
 
-    /**
+    /** 
      * Returns the number of pending requests.
      * @return The number of pending requests
      */
@@ -322,7 +305,7 @@ class WebSocketTransport(
         return correlator.pendingCount()
     }
 
-    /**
+    /** 
      * Returns the number of messages sent.
      * @return The number of messages sent
      */
@@ -330,7 +313,7 @@ class WebSocketTransport(
         return messagesSent.get()
     }
 
-    /**
+    /** 
      * Returns the number of messages received.
      * @return The number of messages received
      */
@@ -338,7 +321,7 @@ class WebSocketTransport(
         return messagesReceived.get()
     }
 
-    /**
+    /** 
      * Returns the number of frames decoded.
      * @return The number of frames decoded
      */
@@ -346,7 +329,7 @@ class WebSocketTransport(
         return framesDecoded.get()
     }
 
-    /**
+    /** 
      * Returns whether the transport is connected.
      * @return true if connected, false otherwise
      */
@@ -354,7 +337,7 @@ class WebSocketTransport(
         return isConnected
     }
 
-    /**
+    /** 
      * Returns the connection error, if any.
      * @return The connection error, or null if no error
      */
@@ -363,7 +346,7 @@ class WebSocketTransport(
     }
 
     companion object {
-        /**
+        /** 
          * Creates a WebSocketTransport instance.
          * @param endpoint The WebSocket endpoint
          * @param headers Additional HTTP headers
@@ -377,40 +360,5 @@ class WebSocketTransport(
         ): WebSocketTransport {
             return WebSocketTransport(scope, endpoint, headers)
         }
-    }
-}
-
-/**
- * Extension function to get the receive channel from a WebSocket.
- * @return The receive channel
- */
-private fun okhttp3.WebSocket.receiveChannel(): ReceiveChannel<Any> = kotlinx.coroutines.channels.produce {
-    val listener = object : okhttp3.WebSocketListener() {
-        override fun onMessage(webSocket: okhttp3.WebSocket, text: String) {
-            trySend(text)
-        }
-
-        override fun onMessage(webSocket: okhttp3.WebSocket, bytes: ByteString) {
-            trySend(bytes)
-        }
-
-        override fun onClosing(webSocket: okhttp3.WebSocket, code: Int, reason: String) {
-            close()
-        }
-
-        override fun onClosed(webSocket: okhttp3.WebSocket, code: Int, reason: String) {
-            close()
-        }
-
-        override fun onFailure(webSocket: okhttp3.WebSocket, t: Throwable, response: okhttp3.Response?) {
-            close()
-        }
-    }
-
-    val webSocketListener = listener
-    webSocket.addListener(webSocketListener)
-
-    awaitClose {
-        webSocket.removeListener(webSocketListener)
     }
 }
