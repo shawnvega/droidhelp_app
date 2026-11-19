@@ -10,7 +10,7 @@ data class SuspendedChat(
     val text: String
 )
 
-data class PendingShareHhandoff(
+data class PendingShareHandoff(
     val id: UUID = UUID(),
     val text: String
 )
@@ -28,7 +28,7 @@ class AppState(val home: HomeSelection) {
     var pendingComposerSendsAtOnce by mutableStateOf(false)
     var pendingComposerAgentID by mutableStateOf<String?>(null)
     var sendsDraftOnOpen by mutableStateOf<Set<String>>(emptySet())
-    var pendingShare by mutableStateOf<PendingShareHhandoff?>(null)
+    var pendingShare by mutableStateOf<PendingShareHandoff?>(null)
 
     val selectedTab: HomeTab
         get() = home.tab
