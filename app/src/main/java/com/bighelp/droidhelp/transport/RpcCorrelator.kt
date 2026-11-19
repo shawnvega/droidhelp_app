@@ -1,6 +1,9 @@
 package com.bighelp.droidhelp.transport
 
 import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.withLock
 
@@ -13,12 +16,56 @@ class RpcCorrelator {
     private val pendingRequests = mutableMapOf<String, PendingOperation>()
     private val callbackExecutor = Executors.newSingleThreadExecutor()
 
+    // Ordered message queue for sequential processing
+    private val messageQueue = LinkedBlockingQueue<Message>()
+    private var processingThread: Thread? = null
+    private val isRunning = AtomicBoolean(false)
+
     /** Represents a pending RPC operation with its callback and timeout info. */
     data class PendingOperation(
         val callback: (Message) -> Unit,
         val timeoutNs: Long = System.nanoTime() + 5_000_000_000L, // 5s default timeout
         var error: Exception? = null
     )
+
+    /** Starts the ordered reader/writer loop. */
+    fun start() {
+        if (isRunning.getAndSet(true)) return
+        processingThread = Thread {
+            while (isRunning.get()) {
+                try {
+                    val message = messageQueue.poll(100, TimeUnit.MILLISECONDS)
+                    if (message != null) {
+                        processMessage(message)
+                    }
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    break
+                }
+            }
+        }
+        processingThread?.start()
+    }
+
+    /** Stops the reader/writer loop. */
+    fun stop() {
+        if (!isRunning.getAndSet(false)) return
+        processingThread?.interrupt()
+        processingThread?.join(5000)
+        processingThread = null
+    }
+
+    /** Submits a message for ordered processing through the reader/writer loop. */
+    fun submit(message: Message) {
+        messageQueue.offer(message)
+    }
+
+    /** Processes a single message in order, correlating responses with pending requests. */
+    private fun processMessage(message: Message) {
+        if (message is Message.Receipt) {
+            correlate(message.entryId, message)
+        }
+    }
 
     /** Registers a callback for a given request ID. */
     fun register(requestId: String, callback: (Message) -> Unit) {
@@ -96,8 +143,9 @@ class RpcCorrelator {
         }
     }
 
-    /** Shuts down the correlator and its executor. */
+    /** Shuts down the correlator, its executor, and the reader/writer loop. */
     fun shutdown() {
+        stop()
         callbackExecutor.shutdown()
     }
 }

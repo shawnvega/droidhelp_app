@@ -114,4 +114,70 @@ class RpcCorrelatorTest {
         assertEquals(totalRequests, completedCount.get())
         correlator.shutdown()
     }
+
+    @Test
+    fun testOrderedReaderWriterLoopPreservesOrder() {
+        val correlator = RpcCorrelator()
+        val count = 20
+        val receivedOrder = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val latch = CountDownLatch(count)
+
+        // Register callbacks that record the order they fire in
+        for (i in 1..count) {
+            val id = "ordered-$i"
+            correlator.register(id) { msg ->
+                if (msg is Message.Receipt) {
+                    receivedOrder.add(msg.entryId)
+                }
+                latch.countDown()
+            }
+        }
+
+        correlator.start()
+
+        // Submit receipts in strict order through the reader/writer loop
+        for (i in 1..count) {
+            correlator.submit(Message.Receipt("ordered-$i"))
+        }
+
+        assertTrue(latch.await(5, TimeUnit.SECONDS), "Not all ordered messages processed")
+        val expected = (1..count).map { "ordered-$it" }
+        assertEquals(expected, receivedOrder.toList(), "Messages were not processed in submission order")
+        correlator.shutdown()
+    }
+
+    @Test
+    fun testReaderWriterLoopUsesCorrelatorMap() {
+        val correlator = RpcCorrelator()
+        val latch = CountDownLatch(1)
+        var received: Message? = null
+
+        correlator.register("loop-req") { msg ->
+            received = msg
+            latch.countDown()
+        }
+        assertEquals(1, correlator.pendingCount())
+
+        correlator.start()
+        correlator.submit(Message.Receipt("loop-req"))
+
+        assertTrue(latch.await(2, TimeUnit.SECONDS), "Callback was not invoked by the loop")
+        assertTrue(received is Message.Receipt)
+        assertEquals("loop-req", (received as Message.Receipt).entryId)
+        // The pending entry must be removed after correlation
+        assertEquals(0, correlator.pendingCount())
+        correlator.shutdown()
+    }
+
+    @Test
+    fun testReaderWriterLoopIgnoresUnknownResponses() {
+        val correlator = RpcCorrelator()
+        correlator.start()
+        // Submitting a receipt with no registered request must not throw or block
+        correlator.submit(Message.Receipt("unknown-id"))
+        correlator.submit(Message.Ping)
+        Thread.sleep(200)
+        assertEquals(0, correlator.pendingCount())
+        correlator.shutdown()
+    }
 }

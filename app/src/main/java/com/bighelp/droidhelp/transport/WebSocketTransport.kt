@@ -101,6 +101,7 @@ class WebSocketTransport(
                         isConnected = true
                         isConnecting = false
                         _incomingMessages.value = Message.Ready
+                        correlator.start()
                         scope.launch {
                             receiveMessages()
                         }
@@ -161,7 +162,7 @@ class WebSocketTransport(
         reconnectJob = null
         webSocket?.close(1000, "Normal closure")
         webSocket = null
-        correlator.shutdown()
+        correlator.stop()
     }
 
     /** 
@@ -217,12 +218,8 @@ class WebSocketTransport(
             val message = json.decodeFromString(Message.serializer(), text)
             _incomingMessages.value = message
             messagesReceived.incrementAndGet()
-
-            // Handle correlator if this is a response
-            if (message is Message.Receipt) {
-                correlator.correlate(message.entryId, message)
-            }
-
+            // Submit message to correlator's ordered reader/writer loop
+            correlator.submit(message)
         } catch (e: Exception) {
             // Handle malformed JSON
         }
