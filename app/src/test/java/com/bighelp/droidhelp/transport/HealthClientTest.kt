@@ -33,6 +33,7 @@ class HealthClientTest {
         val jsonResponse = """
             {
                 "gateway": {
+                    "ready": true,
                     "capabilities": {
                         "per_session_exclusive_submit": true
                     }
@@ -43,6 +44,7 @@ class HealthClientTest {
 
         val response = client.getHealth()
 
+        assertEquals(true, response.gateway.ready)
         assertEquals(true, response.gateway.capabilities.per_session_exclusive_submit)
         
         val recordedRequest = server.takeRequest()
@@ -54,6 +56,7 @@ class HealthClientTest {
         val jsonResponse = """
             {
                 "gateway": {
+                    "ready": true,
                     "capabilities": {}
                 }
             }
@@ -70,8 +73,28 @@ class HealthClientTest {
         val jsonResponse = """
             {
                 "gateway": {
+                    "ready": true,
                     "capabilities": {
                         "per_session_exclusive_submit": false
+                    }
+                }
+            }
+        """.trimIndent()
+        server.enqueue(MockResponse().setBody(jsonResponse).setResponseCode(200))
+
+        assertThrows(IOException::class.java) {
+            kotlinx.coroutines.runBlocking { client.getHealth() }
+        }
+    }
+
+    @Test
+    fun `getHealth throws exception when gateway ready is false`() = runTest {
+        val jsonResponse = """
+            {
+                "gateway": {
+                    "ready": false,
+                    "capabilities": {
+                        "per_session_exclusive_submit": true
                     }
                 }
             }
@@ -124,7 +147,7 @@ class HealthClientTest {
 
     @Test
     fun `getHealth throws exception on malformed JSON`() = runTest {
-        val malformedJson = """{"gateway": {"capabilities": { "key1": }}}"""
+        val malformedJson = """{"gateway": {"ready": true, "capabilities": { "key1": }}}"""
         server.enqueue(MockResponse().setBody(malformedJson).setResponseCode(200))
 
         assertThrows(IOException::class.java) {

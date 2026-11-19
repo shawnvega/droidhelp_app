@@ -15,6 +15,7 @@ data class HealthResponse(
 
 @Serializable
 data class Gateway(
+    val ready: Boolean,
     val capabilities: Capabilities
 )
 
@@ -47,6 +48,9 @@ class HealthClient(
             
             try {
                 val healthResponse = json.decodeFromString<HealthResponse>(body)
+                if (healthResponse.gateway.ready != true) {
+                    throw IOException("gateway.ready must be true")
+                }
                 if (healthResponse.gateway.capabilities.per_session_exclusive_submit != true) {
                     throw IOException("gateway.capabilities.per_session_exclusive_submit must be true")
                 }
