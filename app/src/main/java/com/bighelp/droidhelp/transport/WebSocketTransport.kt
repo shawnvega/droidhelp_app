@@ -1,15 +1,15 @@
 package com.bighelp.droidhelp.transport
 
+import com.bighelp.droidhelp.session.SecureInput
+import com.bighelp.droidhelp.session.Session
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.serializer
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -26,7 +26,12 @@ class WebSocketTransport(
     private val headers: Map<String, String> = emptyMap(),
     private val json: Json = Json,
     private val maxFrameSize: Int = 1024 * 1024, // 1MB
-    private val maxQueueSize: Int = 1000
+    private val maxQueueSize: Int = 1000,
+    private val client: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+        .writeTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
 ) : Transport {
 
     // WebSocket connection state
@@ -36,6 +41,7 @@ class WebSocketTransport(
     private var isConnecting = false
     private var isConnected = false
     private var connectionError: Exception? = null
+    private var connectionAttempts = 0
 
     // Message handling
     private val _incomingMessages = MutableStateFlow<Message?>(null)
@@ -78,10 +84,6 @@ class WebSocketTransport(
             try {
                 val requestBuilder = Request.Builder()
                     .url(endpoint.canonical)
-                    .addHeader("Upgrade", "websocket")
-                    .addHeader("Connection", "Upgrade")
-                    .addHeader("Sec-WebSocket-Key", generateWebSocketKey())
-                    .addHeader("Sec-WebSocket-Version", "13")
 
                 // Add custom headers
                 headers.forEach { (key, value) ->
@@ -89,17 +91,13 @@ class WebSocketTransport(
                 }
 
                 val request = requestBuilder.build()
-                val client = OkHttpClient.Builder()
-                    .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-                    .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-                    .writeTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-                    .build()
 
                 val listener = object : WebSocketListener() {
                     override fun onOpen(webSocket: WebSocket, response: Response) {
                         this@WebSocketTransport.webSocket = webSocket
                         isConnected = true
                         isConnecting = false
+                        connectionAttempts = 0
                         _incomingMessages.value = Message.Ready
                         correlator.start()
                         scope.launch {
@@ -158,6 +156,7 @@ class WebSocketTransport(
         isConnecting = false
         connectionJob?.cancel()
         reconnectJob?.cancel()
+        queueJob.cancel()
         connectionJob = null
         reconnectJob = null
         webSocket?.close(1000, "Normal closure")
@@ -248,8 +247,16 @@ class WebSocketTransport(
         }
 
         reconnectJob = scope.launch {
-            kotlinx.coroutines.delay(5000) // Wait 5 seconds before reconnecting
-            connect()
+            val delay = ReconnectPolicy.delay(connectionAttempts)
+            kotlinx.coroutines.delay(delay.inWholeMilliseconds)
+            connectionAttempts++
+            
+            val session = ReconnectPolicy.getSession()
+            if (session != null) {
+                resumeSession(session)
+            } else {
+                connect()
+            }
         }
     }
 
@@ -268,13 +275,13 @@ class WebSocketTransport(
     }
 
     /** 
-     * Generates a WebSocket key for the handshake.
-     * @return The WebSocket key
+     * Resumes a session by re-establishing the profile and connection.
+     * @param session The session to resume.
      */
-    private fun generateWebSocketKey(): String {
-        val random = ByteArray(16)
-        java.security.SecureRandom().nextBytes(random)
-        return android.util.Base64.encodeToString(random, android.util.Base64.NO_WRAP)
+    override fun resumeSession(session: Session) {
+        ReconnectPolicy.setSession(session)
+        SecureInput.bind(session.profile)
+        connect()
     }
 
     /** 
