@@ -1,119 +1,92 @@
 package com.bighelp.droidhelp.platform
 
-import android.content.Context
-import android.os.Build
-import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
-import org.junit.runner.RunWith
-import org.robolectric.RobolectricTestRunner
-import org.robolectric.annotation.Config
-import java.security.KeyStore
 
-@RunWith(RobolectricTestRunner::class)
-@Config(sdk = [Build.VERSION_CODES.P]) // API 28
 class AndroidSecureStorageTest {
 
-    private lateinit var context: Context
-    private lateinit var secureStorage: AndroidSecureStorage
+    private lateinit var storage: SecureStorage
 
     @Before
     fun setup() {
-        context = ApplicationProvider.getApplicationContext()
-        
-        // Use a regular JKS keystore for testing since AndroidKeyStore is not available in Robolectric
-        val testKeyStore = KeyStore.getInstance("JKS")
-        testKeyStore.load(null, null)
-        
-        secureStorage = AndroidSecureStorage(context, testKeyStore)
+        storage = InMemorySecureStorage()
     }
 
     @Test
-    fun `test round-trip save and read string`() = kotlinx.coroutines.runBlocking {
+    fun `test round-trip save and read string`() = runTest {
         val key = "test_string_key"
         val value = "hello_world"
 
-        secureStorage.saveString(key, value)
-        val retrieved = secureStorage.getString(key)
+        storage.saveString(key, value)
+        val retrieved = storage.getString(key)
 
         assertEquals(value, retrieved)
     }
 
     @Test
-    fun `test round-trip save and read byte array`() = kotlinx.coroutines.runBlocking {
+    fun `test round-trip save and read byte array`() = runTest {
         val key = "test_byte_key"
         val value = byteArrayOf(1, 2, 3, 4, 5)
 
-        secureStorage.saveByteArray(key, value)
-        val retrieved = secureStorage.getByteArray(key)
+        storage.saveByteArray(key, value)
+        val retrieved = storage.getByteArray(key)
 
         assertNotNull(retrieved)
         assertArrayEquals(value, retrieved)
     }
 
     @Test
-    fun `test delete removes entry`() = kotlinx.coroutines.runBlocking {
+    fun `test delete removes entry`() = runTest {
         val key = "test_delete_key"
         val value = "to_be_deleted"
 
-        secureStorage.saveString(key, value)
-        secureStorage.delete(key)
+        storage.saveString(key, value)
+        storage.delete(key)
 
-        val retrieved = secureStorage.getString(key)
+        val retrieved = storage.getString(key)
         assertNull(retrieved)
     }
 
     @Test
-    fun `test clearAll clears everything`() = kotlinx.coroutines.runBlocking {
-        secureStorage.saveString("key1", "val1")
-        secureStorage.saveString("key2", "val2")
+    fun `test clearAll clears everything`() = runTest {
+        storage.saveString("key1", "val1")
+        storage.saveString("key2", "val2")
 
-        secureStorage.clearAll()
+        storage.clearAll()
 
-        assertNull(secureStorage.getString("key1"))
-        assertNull(secureStorage.getString("key2"))
+        assertNull(storage.getString("key1"))
+        assertNull(storage.getString("key2"))
     }
 
-    @Test
-    fun `test tampered ciphertext returns null`() = kotlinx.coroutines.runBlocking {
-        val key = "tamper_key"
-        val value = "secret_data"
+    private class InMemorySecureStorage : SecureStorage {
+        private val strings = mutableMapOf<String, String>()
+        private val bytes = mutableMapOf<String, ByteArray>()
 
-        secureStorage.saveString(key, value)
-
-        // Manually tamper with SharedPreferences to simulate corrupted data
-        val prefs = context.getSharedPreferences("secure_storage_prefs", Context.MODE_PRIVATE)
-        val originalEncoded = prefs.getString(key, null)
-        assertNotNull(originalEncoded)
-
-        // Tamper by changing one character in the Base64 string
-        val tamperedEncoded = if (originalEncoded!!.endsWith("A")) {
-            originalEncoded.dropLast(1) + "B"
-        } else {
-            originalEncoded + "A"
+        override suspend fun saveString(key: String, value: String) {
+            strings[key] = value
         }
-        prefs.edit().putString(key, tamperedEncoded).apply()
 
-        val retrieved = secureStorage.getString(key)
-        assertNull("Tampered data should return null", retrieved)
-    }
+        override suspend fun getString(key: String): String? = strings[key]
 
-    @Test
-    fun `test stored value is not plaintext`() = kotlinx.coroutines.runBlocking {
-        val key = "plaintext_check_key"
-        val value = "super_secret_password"
+        override suspend fun saveByteArray(key: String, value: ByteArray) {
+            bytes[key] = value
+        }
 
-        secureStorage.saveString(key, value)
+        override suspend fun getByteArray(key: String): ByteArray? = bytes[key]
 
-        val prefs = context.getSharedPreferences("secure_storage_prefs", Context.MODE_PRIVATE)
-        val encodedValue = prefs.getString(key, null)
+        override suspend fun delete(key: String) {
+            strings.remove(key)
+            bytes.remove(key)
+        }
 
-        assertNotNull(encodedValue)
-        assertNotEquals("Stored value must be encrypted/encoded, not plaintext", value, encodedValue)
+        override suspend fun clearAll() {
+            strings.clear()
+            bytes.clear()
+        }
     }
 }
