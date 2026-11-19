@@ -11,7 +11,7 @@ data class SuspendedChat(
 )
 
 data class PendingShareHandoff(
-    val id: UUID = UUID(),
+    val id: UUID = UUID.randomUUID(),
     val text: String
 )
 
