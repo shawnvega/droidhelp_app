@@ -34,6 +34,11 @@ class WebSocketTransport(
         .build()
 ) : Transport {
 
+    private val owners = Owners()
+
+    /** Represents a message paired with its captured socket owner for fencing. */
+    private data class FencedMessage(val message: Message, val capturedSocketOwner: SocketOwner)
+
     // WebSocket connection state
     private var webSocket: WebSocket? = null
     private var connectionJob: Job? = null
@@ -48,8 +53,8 @@ class WebSocketTransport(
     private val incomingChannel = Channel<Any>(Channel.BUFFERED)
 
     // Outbound message queue
-    private val outboundQueue: Channel<Message> = Channel(maxQueueSize)
-    private val queueJob: Job
+    private val outboundQueue: Channel<FencedMessage> = Channel(maxQueueSize)
+    private var queueJob: Job? = null
 
     // Correlator stub for request/response correlation
     private val correlator = RpcCorrelator()
@@ -100,6 +105,10 @@ class WebSocketTransport(
                         connectionAttempts = 0
                         _incomingMessages.value = Message.Ready
                         correlator.start()
+                        
+                        // Increment socket epoch on new connection
+                        owners.incrementSocketEpoch()
+                        
                         scope.launch {
                             receiveMessages()
                         }
@@ -156,7 +165,7 @@ class WebSocketTransport(
         isConnecting = false
         connectionJob?.cancel()
         reconnectJob?.cancel()
-        queueJob.cancel()
+        queueJob?.cancel()
         connectionJob = null
         reconnectJob = null
         webSocket?.close(1000, "Normal closure")
@@ -169,8 +178,10 @@ class WebSocketTransport(
      * @param message The message to send
      */
     override fun send(message: Message) {
+        val socketOwner = owners.getSocketOwner()
+            ?: throw IllegalStateException("No SocketOwner available. Call connect() or resumeSession() first.")
         scope.launch {
-            outboundQueue.send(message)
+            outboundQueue.send(FencedMessage(message, socketOwner))
         }
     }
 
@@ -195,11 +206,13 @@ class WebSocketTransport(
      * Processes the outbound message queue.
      */
     private suspend fun processOutboundQueue() {
-        for (message in outboundQueue) {
+        for (fenced in outboundQueue) {
             while (!isConnected) {
                 kotlinx.coroutines.delay(100)
             }
-            actualSend(message)
+            // Validate fencing
+            owners.validateSocketOwner(fenced.capturedSocketOwner)
+            actualSend(fenced.message)
         }
     }
 
@@ -355,6 +368,19 @@ class WebSocketTransport(
      */
     fun getConnectionError(): Exception? {
         return connectionError
+    }
+
+    /** Returns the owners instance. */
+    fun getOwners(): Owners = owners
+
+    /** Updates the current sign-in state. */
+    fun setSignIn(signIn: SignIn) {
+        owners.updateSignIn(signIn)
+    }
+
+    /** Updates the current owner state. */
+    fun setOwner(owner: Owner) {
+        owners.updateOwner(owner)
     }
 
     companion object {
