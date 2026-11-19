@@ -33,8 +33,7 @@ class HealthClientTest {
             {
                 "gateway": {
                     "capabilities": {
-                        "key1": "value1",
-                        "key2": "value2"
+                        "per_session_exclusive_submit": true
                     }
                 }
             }
@@ -43,11 +42,44 @@ class HealthClientTest {
 
         val response = client.getHealth()
 
-        assertEquals("value1", response.gateway.capabilities["key1"])
-        assertEquals("value2", response.gateway.capabilities["key2"])
+        assertEquals(true, response.gateway.capabilities.per_session_exclusive_submit)
         
         val recordedRequest = server.takeRequest()
         assertEquals("/api/health", recordedRequest.path)
+    }
+
+    @Test
+    fun `getHealth throws exception when per_session_exclusive_submit is missing`() = runTest {
+        val jsonResponse = """
+            {
+                "gateway": {
+                    "capabilities": {}
+                }
+            }
+        """.trimIndent()
+        server.enqueue(MockResponse().setBody(jsonResponse).setResponseCode(200))
+
+        assertThrows(IOException::class.java) {
+            kotlinx.coroutines.runBlocking { client.getHealth() }
+        }
+    }
+
+    @Test
+    fun `getHealth throws exception when per_session_exclusive_submit is false`() = runTest {
+        val jsonResponse = """
+            {
+                "gateway": {
+                    "capabilities": {
+                        "per_session_exclusive_submit": false
+                    }
+                }
+            }
+        """.trimIndent()
+        server.enqueue(MockResponse().setBody(jsonResponse).setResponseCode(200))
+
+        assertThrows(IOException::class.java) {
+            kotlinx.coroutines.runBlocking { client.getHealth() }
+        }
     }
 
     @Test
@@ -55,17 +87,13 @@ class HealthClientTest {
         server.enqueue(MockResponse().setResponseCode(500))
 
         assertThrows(IOException::class.java) {
-            // Since we are in runTest, we can use runTest again or just call it? 
-            // Actually, runTest is a coroutine scope. We can use it to launch a new coroutine.
-            // But assertThrows expects a synchronous call.
-            // The easiest way is to use runBlocking inside the lambda.
             kotlinx.coroutines.runBlocking { client.getHealth() }
         }
     }
 
     @Test
     fun `getHealth throws exception on malformed JSON`() = runTest {
-        val malformedJson = """{"gateway": {"capabilities": { "key1": }}"""
+        val malformedJson = """{"gateway": {"capabilities": { "key1": }}}"""
         server.enqueue(MockResponse().setBody(malformedJson).setResponseCode(200))
 
         assertThrows(IOException::class.java) {

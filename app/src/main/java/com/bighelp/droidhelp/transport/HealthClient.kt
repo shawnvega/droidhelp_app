@@ -15,7 +15,12 @@ data class HealthResponse(
 
 @Serializable
 data class Gateway(
-    val capabilities: Map<String, String>
+    val capabilities: Capabilities
+)
+
+@Serializable
+data class Capabilities(
+    val per_session_exclusive_submit: Boolean? = null
 )
 
 class HealthClient(
@@ -41,8 +46,13 @@ class HealthClient(
                 ?: throw IOException("Empty response body")
             
             try {
-                json.decodeFromString<HealthResponse>(body)
+                val healthResponse = json.decodeFromString<HealthResponse>(body)
+                if (healthResponse.gateway.capabilities.per_session_exclusive_submit != true) {
+                    throw IOException("gateway.capabilities.per_session_exclusive_submit must be true")
+                }
+                healthResponse
             } catch (e: Exception) {
+                if (e is IOException) throw e
                 throw IOException("Failed to parse health response", e)
             }
         }
