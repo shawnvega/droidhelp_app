@@ -170,6 +170,37 @@ class RpcCorrelatorTest {
     }
 
     @Test
+    fun testReaderWriterLoopSerializesCallbacks() {
+        val correlator = RpcCorrelator()
+        val count = 10
+        val latch = CountDownLatch(count)
+        val activeCallbacks = AtomicInteger(0)
+        val maxConcurrentObserved = AtomicInteger(0)
+
+        for (i in 1..count) {
+            val id = "serial-$i"
+            correlator.register(id) {
+                val current = activeCallbacks.incrementAndGet()
+                if (current > 1) {
+                    maxConcurrentObserved.set(current)
+                }
+                Thread.sleep(50) // Simulate work
+                activeCallbacks.decrementAndGet()
+                latch.countDown()
+            }
+        }
+
+        correlator.start()
+        for (i in 1..count) {
+            correlator.submit(Message.Receipt("serial-$i"))
+        }
+
+        assertTrue(latch.await(5, TimeUnit.SECONDS), "Not all callbacks completed")
+        assertEquals(0, maxConcurrentObserved.get(), "Callbacks executed concurrently in reader/writer loop")
+        correlator.shutdown()
+    }
+
+    @Test
     fun testReaderWriterLoopIgnoresUnknownResponses() {
         val correlator = RpcCorrelator()
         correlator.start()
