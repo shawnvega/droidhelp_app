@@ -10,7 +10,7 @@ class CapabilitiesRegistryTest {
         val registry = CapabilitiesRegistry()
         registry.register("key1", "value1")
         registry.register("key2", "value2")
-        
+
         assertEquals("value1", registry.lookup("key1"))
         assertEquals("value2", registry.lookup("key2"))
         assertEquals(2, registry.size())
@@ -20,7 +20,7 @@ class CapabilitiesRegistryTest {
     fun `lookup non-existent key returns null`() {
         val registry = CapabilitiesRegistry()
         registry.register("key1", "value1")
-        
+
         assertNull(registry.lookup("non-existent"))
         assertEquals(1, registry.size())
     }
@@ -30,7 +30,7 @@ class CapabilitiesRegistryTest {
         val registry = CapabilitiesRegistry()
         registry.register("key1", "value1")
         registry.register("key2", "value2")
-        
+
         val keys = registry.list()
         assertTrue(keys.contains("key1"))
         assertTrue(keys.contains("key2"))
@@ -42,7 +42,7 @@ class CapabilitiesRegistryTest {
         val registry = CapabilitiesRegistry()
         registry.register("key1", "value1")
         registry.register("key2", "value2")
-        
+
         val all = registry.all()
         assertEquals("value1", all["key1"])
         assertEquals("value2", all["key2"])
@@ -53,7 +53,7 @@ class CapabilitiesRegistryTest {
     fun `unregister removes capability`() {
         val registry = CapabilitiesRegistry()
         registry.register("key1", "value1")
-        
+
         assertTrue(registry.unregister("key1"))
         assertNull(registry.lookup("key1"))
         assertEquals(0, registry.size())
@@ -64,7 +64,7 @@ class CapabilitiesRegistryTest {
         val registry = CapabilitiesRegistry()
         registry.register("key1", "value1")
         registry.register("key2", "value2")
-        
+
         assertEquals(2, registry.size())
         registry.clear()
         assertEquals(0, registry.size())
@@ -76,8 +76,53 @@ class CapabilitiesRegistryTest {
     fun `register with null value`() {
         val registry = CapabilitiesRegistry()
         registry.register("key1", null)
-        
+
         assertNull(registry.lookup("key1"))
         assertEquals(1, registry.size())
+    }
+
+    @Test
+    fun `register with plugin context and retrieve it`() {
+        val registry = CapabilitiesRegistry()
+        registry.register("key1", "value1", context = "pluginA")
+
+        assertEquals("value1", registry.lookup("key1"))
+        assertEquals("pluginA", registry.lookupContext("key1"))
+    }
+
+    @Test
+    fun `context-free registration and lookup still succeed`() {
+        val registry = CapabilitiesRegistry()
+        registry.register("key1", "value1")
+
+        assertEquals("value1", registry.lookup("key1"))
+        assertNull(registry.lookupContext("key1"))
+        assertEquals(1, registry.size())
+    }
+
+    @Test
+    fun `register with context then overwrite without context clears context`() {
+        val registry = CapabilitiesRegistry()
+        registry.register("key1", "value1", context = "pluginA")
+        registry.register("key1", "value2") // no context provided
+
+        assertEquals("value2", registry.lookup("key1"))
+        assertNull(registry.lookupContext("key1"))
+    }
+
+    @Test
+    fun `register with context then overwrite with different context`() {
+        val registry = CapabilitiesRegistry()
+        registry.register("key1", "value1", context = "pluginA")
+        registry.register("key1", "value2", context = "pluginB")
+
+        assertEquals("value2", registry.lookup("key1"))
+        assertEquals("pluginB", registry.lookupContext("key1"))
+    }
+
+    @Test
+    fun `lookupContext returns null for unknown key`() {
+        val registry = CapabilitiesRegistry()
+        assertNull(registry.lookupContext("unknown"))
     }
 }
