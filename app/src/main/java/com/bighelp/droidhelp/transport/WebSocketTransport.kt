@@ -169,16 +169,8 @@ class WebSocketTransport(
      * @param message The message to send
      */
     override fun send(message: Message) {
-        if (!isConnected) {
-            return
-        }
-
-        try {
-            val jsonString = json.encodeToString(Message.serializer(), message)
-            webSocket?.send(jsonString)
-            messagesSent.incrementAndGet()
-        } catch (e: Exception) {
-            // Log error but don't crash
+        scope.launch {
+            outboundQueue.send(message)
         }
     }
 
@@ -204,8 +196,20 @@ class WebSocketTransport(
      */
     private suspend fun processOutboundQueue() {
         for (message in outboundQueue) {
-            send(message)
+            while (!isConnected) {
+                kotlinx.coroutines.delay(100)
+            }
+            actualSend(message)
         }
+    }
+
+    /**
+     * Performs the actual network send.
+     */
+    private fun actualSend(message: Message) {
+        val jsonString = json.encodeToString(Message.serializer(), message)
+        webSocket?.send(jsonString)
+        messagesSent.incrementAndGet()
     }
 
     /** 
