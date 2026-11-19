@@ -130,7 +130,7 @@ class Auth(private val secureStorage: SecureStorage) {
         val current = secureStorage.getString(REFRESH_TOKEN_KEY)
         
         if (current != null && current != oldRefreshToken) {
-            throw TokenReuseException(\"Refresh token reuse detected!\")
+            throw TokenReuseException("Refresh token reuse detected!")
         }
 
         secureStorage.saveString(ACCESS_TOKEN_KEY, newAccessToken)
