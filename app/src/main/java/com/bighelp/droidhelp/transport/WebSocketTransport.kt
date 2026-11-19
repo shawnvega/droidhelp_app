@@ -254,7 +254,11 @@ class WebSocketTransport(
             val delay = ReconnectPolicy.delay(connectionAttempts)
             kotlinx.coroutines.delay(delay.inWholeMilliseconds)
             connectionAttempts++
-            
+
+            if (!ReconnectPolicy.isQuiet(connectionAttempts)) {
+                return@launch
+            }
+
             val session = ReconnectPolicy.getSession()
             if (session != null) {
                 resumeSession(session)
