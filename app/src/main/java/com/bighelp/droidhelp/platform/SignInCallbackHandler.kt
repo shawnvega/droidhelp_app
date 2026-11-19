@@ -1,11 +1,18 @@
 package com.bighelp.droidhelp.platform
 
 import java.net.URI
+import java.net.URLDecoder
+import java.net.URLEncoder
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okhttp3.RequestBody.Companion.toRequestBody
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.json.Json
 
 /**
  * Interface for making HTTP requests.
@@ -19,15 +26,15 @@ interface HttpClient {
  */
 class OkHttpClientImpl(private val httpClient: OkHttpClient) : HttpClient {
 
-    override suspend fun post(url: String, body: Map<String, String>): Response {
-        val requestBody = body.entries.joinToString("&") { "${it.key}=${it.value}" }
+    override suspend fun post(url: String, body: Map<String, String>): Response = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val requestBody = body.entries.joinToString("&") { "${java.net.URLEncoder.encode(it.key, "UTF-8")}=${java.net.URLEncoder.encode(it.value, "UTF-8")}" }
         val mediaType = "application/x-www-form-urlencoded".toMediaTypeOrNull()
         val requestBodyObj = requestBody.toRequestBody(mediaType)
         val request = Request.Builder()
             .url(url)
             .post(requestBodyObj)
             .build()
-        return httpClient.newCall(request).execute()
+        httpClient.newCall(request).execute()
     }
 }
 
@@ -82,10 +89,18 @@ class SignInCallbackHandler(
                 port = expectedPort,
                 path = expectedPath,
                 state = parsed.state,
-                url = URI("http://localhost:$expectedPort$expectedPath")
+                url = parsed.incomingUrl
             )
 
-            val code = callback.validate(parsed.incomingUrl, parsed.queryParams)
+            val code = try {
+                callback.validate(parsed.incomingUrl, parsed.queryParams)
+            } catch (e: BrowserAuthenticationException) {
+                throw SignInCallbackException(
+                    "Invalid redirect: ${e.message}",
+                    SignInCallbackException.ErrorType.INVALID_REDIRECT,
+                    e
+                )
+            }
 
             // 4. Exchange the authorization code using PKCE
             val verifier = auth.getOrCreateVerifier()
@@ -152,8 +167,8 @@ class SignInCallbackHandler(
                 for (param in params) {
                     val keyValue = param.split("=", limit = 2)
                     if (keyValue.size == 2) {
-                        val key = keyValue[0]
-                        val value = keyValue[1]
+                        val key = java.net.URLDecoder.decode(keyValue[0], "UTF-8")
+                        val value = java.net.URLDecoder.decode(keyValue[1], "UTF-8")
                         queryParams[key] = value
                     }
                 }
@@ -224,19 +239,17 @@ class SignInCallbackHandler(
                 )
 
             // Parse JSON response
-            val accessToken = extractJsonField(responseBody, "access_token")
-                ?: throw SignInCallbackException(
-                    "Missing access_token in response",
-                    SignInCallbackException.ErrorType.TOKEN_EXCHANGE_FAILED
+            val tokenResponse = try {
+                Json.decodeFromString<TokenResponse>(responseBody)
+            } catch (e: Exception) {
+                throw SignInCallbackException(
+                    "Failed to parse token response: ${e.message}",
+                    SignInCallbackException.ErrorType.TOKEN_EXCHANGE_FAILED,
+                    e
                 )
+            }
 
-            val refreshToken = extractJsonField(responseBody, "refresh_token")
-                ?: throw SignInCallbackException(
-                    "Missing refresh_token in response",
-                    SignInCallbackException.ErrorType.TOKEN_EXCHANGE_FAILED
-                )
-
-            return Pair(accessToken, refreshToken)
+            return Pair(tokenResponse.accessToken, tokenResponse.refreshToken)
 
         } catch (e: SignInCallbackException) {
             throw e
@@ -247,17 +260,6 @@ class SignInCallbackHandler(
                 e
             )
         }
-    }
-
-    /**
-     * Extracts a field from a JSON string (simplified implementation).
-     * In a real implementation, use a proper JSON library like Gson or Kotlinx Serialization.
-     */
-    private fun extractJsonField(json: String, field: String): String? {
-        // Simplified JSON parsing - in production use a proper JSON library
-        val pattern = "\"$field\"\\s*:\\s*\"([^\"]*)\"".toRegex()
-        val match = pattern.find(json)
-        return match?.groupValues?.get(1)
     }
 
     /**
@@ -301,5 +303,14 @@ class SignInCallbackHandler(
         val queryParams: Map<String, String>,
         val state: String,
         val code: String
+    )
+
+    /**
+     * Internal data class for parsing the token response.
+     */
+    @Serializable
+    private data class TokenResponse(
+        @SerialName("access_token") val accessToken: String,
+        @SerialName("refresh_token") val refreshToken: String
     )
 }

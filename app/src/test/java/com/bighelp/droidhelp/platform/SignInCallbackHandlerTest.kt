@@ -1,25 +1,14 @@
 package com.bighelp.droidhelp.platform
 
-import com.bighelp.droidhelp.transport.Endpoint
-import kotlinx.coroutines.test.runTest
+import java.net.URI
+import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.Response
-import okhttp3.ResponseBody
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertNotNull
+import kotlinx.coroutines.test.runTest
+import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
 /**
  * Tests for the SignInCallbackHandler class.
- * Covers the complete sign-in callback flow:
- * - Parse authorization response
- * - Validate state
- * - Validate loopback redirect
- * - Exchange authorization code using PKCE
- * - Store tokens including refresh token
- * - Handle errors gracefully
  */
 class SignInCallbackHandlerTest {
 
@@ -32,7 +21,7 @@ class SignInCallbackHandlerTest {
             )
             return Response.Builder()
                 .request(Request.Builder().url(url).build())
-                .protocol(okhttp3.Protocol.HTTP_1_1)
+                .protocol(Protocol.HTTP_1_1)
                 .code(200)
                 .message("OK")
                 .body(responseBody)
@@ -47,20 +36,13 @@ class SignInCallbackHandlerTest {
         val httpClient = FakeHttpClient()
         val handler = SignInCallbackHandler(auth, httpClient, "http://localhost:8080/auth/callback")
 
-        val endpoint = Endpoint(
-            deploymentPrefix = null,
-            host = "localhost",
-            port = 8080,
-            path = "/auth/callback",
-            scheme = "http"
-        )
-
         // Set up the code_verifier in storage
         val verifier = auth.generateCodeVerifier()
         auth.saveTokens("old_access", "old_refresh") // Initialize tokens
 
         // Simulate the callback URL with code and state
-        val callbackUrl = "http://localhost:8080/auth/callback?state=test_state&code=test_code"
+        val state = auth.generateAndSaveState()
+        val callbackUrl = "http://localhost:8080/auth/callback?state=$state&code=test_code"
 
         // Act
         val (accessToken, refreshToken) = handler.processCallback(callbackUrl, 8080, "/auth/callback")
@@ -79,14 +61,6 @@ class SignInCallbackHandlerTest {
         val httpClient = FakeHttpClient()
         val handler = SignInCallbackHandler(auth, httpClient, "http://localhost:8080/auth/callback")
 
-        val endpoint = Endpoint(
-            deploymentPrefix = null,
-            host = "localhost",
-            port = 8080,
-            path = "/auth/callback",
-            scheme = "http"
-        )
-
         // Set up a different state in storage (won't match)
         auth.generateAndSaveState()
 
@@ -97,8 +71,8 @@ class SignInCallbackHandlerTest {
         var exception: SignInCallbackHandler.SignInCallbackException? = null
         try {
             handler.processCallback(callbackUrl, 8080, "/auth/callback")
-        } catch (e: SignInCallbackHandler.SignInCallbackException) {
-            exception = e
+        } catch (e: Exception) {
+            exception = e as? SignInCallbackHandler.SignInCallbackException
         }
         assertNotNull(exception)
         assertEquals(SignInCallbackHandler.SignInCallbackException.ErrorType.INVALID_STATE, exception!!.errorType)
@@ -111,14 +85,6 @@ class SignInCallbackHandlerTest {
         val httpClient = FakeHttpClient()
         val handler = SignInCallbackHandler(auth, httpClient, "http://example.com:8080/auth/callback")
 
-        val endpoint = Endpoint(
-            deploymentPrefix = null,
-            host = "localhost",
-            port = 8080,
-            path = "/auth/callback",
-            scheme = "http"
-        )
-
         // Simulate the callback URL with a non-loopback host
         val callbackUrl = "http://example.com:8080/auth/callback?state=test_state&code=test_code"
 
@@ -126,8 +92,8 @@ class SignInCallbackHandlerTest {
         var exception: SignInCallbackHandler.SignInCallbackException? = null
         try {
             handler.processCallback(callbackUrl, 8080, "/auth/callback")
-        } catch (e: SignInCallbackHandler.SignInCallbackException) {
-            exception = e
+        } catch (e: Exception) {
+            exception = e as? SignInCallbackHandler.SignInCallbackException
         }
         assertNotNull(exception)
         assertEquals(SignInCallbackHandler.SignInCallbackException.ErrorType.INVALID_REDIRECT, exception!!.errorType)
@@ -138,25 +104,21 @@ class SignInCallbackHandlerTest {
         // Arrange
         val auth = Auth(FakeSecureStorage())
         val httpClient = FakeHttpClient()
-        val handler = SignInCallbackHandler(auth, httpClient, "http://localhost:9090/auth/callback")
+        val handler = SignInCallbackHandler(auth, httpClient, "http://localhost:8080/auth/callback")
 
-        val endpoint = Endpoint(
-            deploymentPrefix = null,
-            host = "localhost",
-            port = 8080,
-            path = "/auth/callback",
-            scheme = "http"
-        )
+        // Set up the code_verifier in storage
+        val verifier = auth.generateCodeVerifier()
+        val state = auth.generateAndSaveState()
 
         // Simulate the callback URL with a different port
-        val callbackUrl = "http://localhost:9090/auth/callback?state=test_state&code=test_code"
+        val callbackUrl = "http://localhost:9090/auth/callback?state=$state&code=test_code"
 
         // Assert
         var exception: SignInCallbackHandler.SignInCallbackException? = null
         try {
             handler.processCallback(callbackUrl, 8080, "/auth/callback")
-        } catch (e: SignInCallbackHandler.SignInCallbackException) {
-            exception = e
+        } catch (e: Exception) {
+            exception = e as? SignInCallbackHandler.SignInCallbackException
         }
         assertNotNull(exception)
         assertEquals(SignInCallbackHandler.SignInCallbackException.ErrorType.INVALID_REDIRECT, exception!!.errorType)
@@ -169,14 +131,6 @@ class SignInCallbackHandlerTest {
         val httpClient = FakeHttpClient()
         val handler = SignInCallbackHandler(auth, httpClient, "http://localhost:8080/auth/callback")
 
-        val endpoint = Endpoint(
-            deploymentPrefix = null,
-            host = "localhost",
-            port = 8080,
-            path = "/auth/callback",
-            scheme = "http"
-        )
-
         // Simulate the callback URL without code parameter
         val callbackUrl = "http://localhost:8080/auth/callback?state=test_state"
 
@@ -184,8 +138,8 @@ class SignInCallbackHandlerTest {
         var exception: SignInCallbackHandler.SignInCallbackException? = null
         try {
             handler.processCallback(callbackUrl, 8080, "/auth/callback")
-        } catch (e: SignInCallbackHandler.SignInCallbackException) {
-            exception = e
+        } catch (e: Exception) {
+            exception = e as? SignInCallbackHandler.SignInCallbackException
         }
         assertNotNull(exception)
         assertEquals(SignInCallbackHandler.SignInCallbackException.ErrorType.MISSING_CODE, exception!!.errorType)
@@ -198,14 +152,6 @@ class SignInCallbackHandlerTest {
         val httpClient = FakeHttpClient()
         val handler = SignInCallbackHandler(auth, httpClient, "http://localhost:8080/auth/callback")
 
-        val endpoint = Endpoint(
-            deploymentPrefix = null,
-            host = "localhost",
-            port = 8080,
-            path = "/auth/callback",
-            scheme = "http"
-        )
-
         // Simulate the callback URL without state parameter
         val callbackUrl = "http://localhost:8080/auth/callback?code=test_code"
 
@@ -213,8 +159,8 @@ class SignInCallbackHandlerTest {
         var exception: SignInCallbackHandler.SignInCallbackException? = null
         try {
             handler.processCallback(callbackUrl, 8080, "/auth/callback")
-        } catch (e: SignInCallbackHandler.SignInCallbackException) {
-            exception = e
+        } catch (e: Exception) {
+            exception = e as? SignInCallbackHandler.SignInCallbackException
         }
         assertNotNull(exception)
         assertEquals(SignInCallbackHandler.SignInCallbackException.ErrorType.INVALID_STATE, exception!!.errorType)
@@ -227,19 +173,12 @@ class SignInCallbackHandlerTest {
         val httpClient = FakeHttpClient()
         val handler = SignInCallbackHandler(auth, httpClient, "http://localhost:8080/auth/callback")
 
-        val endpoint = Endpoint(
-            deploymentPrefix = null,
-            host = "127.0.0.1",
-            port = 8080,
-            path = "/auth/callback",
-            scheme = "http"
-        )
-
         // Set up the code_verifier in storage
         val verifier = auth.generateCodeVerifier()
+        val state = auth.generateAndSaveState()
 
         // Simulate the callback URL with valid loopback host
-        val callbackUrl = "http://127.0.0.1:8080/auth/callback?state=test_state&code=test_code"
+        val callbackUrl = "http://127.0.0.1:8080/auth/callback?state=$state&code=test_code"
 
         // Act
         val (accessToken, refreshToken) = handler.processCallback(callbackUrl, 8080, "/auth/callback")
@@ -247,5 +186,111 @@ class SignInCallbackHandlerTest {
         // Assert
         assertNotNull(accessToken)
         assertNotNull(refreshToken)
+    }
+
+    @Test
+    fun testProcessCallbackInvalidPath() = runTest {
+        // Arrange
+        val auth = Auth(FakeSecureStorage())
+        val httpClient = FakeHttpClient()
+        val handler = SignInCallbackHandler(auth, httpClient, "http://localhost:8080/auth/callback")
+
+        // Simulate the callback URL with a different path
+        val state = auth.generateAndSaveState()
+        val callbackUrl = "http://localhost:8080/wrong/path?state=$state&code=test_code"
+
+        // Assert
+        var exception: SignInCallbackHandler.SignInCallbackException? = null
+        try {
+            handler.processCallback(callbackUrl, 8080, "/auth/callback")
+        } catch (e: Exception) {
+            exception = e as? SignInCallbackHandler.SignInCallbackException
+        }
+        assertNotNull(exception)
+        assertEquals(SignInCallbackHandler.SignInCallbackException.ErrorType.INVALID_REDIRECT, exception!!.errorType)
+    }
+
+    @Test
+    fun testProcessCallbackTokenExchangeFailure() = runTest {
+        // Arrange
+        val auth = Auth(FakeSecureStorage())
+        val httpClient = object : HttpClient {
+            override suspend fun post(url: String, body: Map<String, String>): Response {
+                return Response.Builder()
+                    .request(Request.Builder().url(url).build())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(500)
+                    .message("Internal Server Error")
+                    .body(ResponseBody.create("application/json".toMediaTypeOrNull(), ""))
+                    .build()
+            }
+        }
+        val handler = SignInCallbackHandler(auth, httpClient, "http://localhost:8080/auth/callback")
+
+        val state = auth.generateAndSaveState()
+        val callbackUrl = "http://localhost:8080/auth/callback?state=$state&code=test_code"
+
+        // Assert
+        var exception: SignInCallbackHandler.SignInCallbackException? = null
+        try {
+            handler.processCallback(callbackUrl, 8080, "/auth/callback")
+        } catch (e: Exception) {
+            exception = e as? SignInCallbackHandler.SignInCallbackException
+        }
+        assertNotNull(exception)
+        assertEquals(SignInCallbackHandler.SignInCallbackException.ErrorType.TOKEN_EXCHANGE_FAILED, exception!!.errorType)
+    }
+
+    @Test
+    fun testProcessCallbackEmptyResponse() = runTest {
+        // Arrange
+        val auth = Auth(FakeSecureStorage())
+        val httpClient = object : HttpClient {
+            override suspend fun post(url: String, body: Map<String, String>): Response {
+                return Response.Builder()
+                    .request(Request.Builder().url(url).build())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .body(ResponseBody.create("application/json".toMediaTypeOrNull(), ""))
+                    .build()
+            }
+        }
+        val handler = SignInCallbackHandler(auth, httpClient, "http://localhost:8080/auth/callback")
+
+        val state = auth.generateAndSaveState()
+        val callbackUrl = "http://localhost:8080/auth/callback?state=$state&code=test_code"
+
+        // Assert
+        var exception: SignInCallbackHandler.SignInCallbackException? = null
+        try {
+            handler.processCallback(callbackUrl, 8080, "/auth/callback")
+        } catch (e: Exception) {
+            exception = e as? SignInCallbackHandler.SignInCallbackException
+        }
+        assertNotNull(exception)
+        assertEquals(SignInCallbackHandler.SignInCallbackException.ErrorType.TOKEN_EXCHANGE_FAILED, exception!!.errorType)
+    }
+
+    @Test
+    fun testProcessCallbackInvalidScheme() = runTest {
+        // Arrange
+        val auth = Auth(FakeSecureStorage())
+        val httpClient = FakeHttpClient()
+        val handler = SignInCallbackHandler(auth, httpClient, "http://localhost:8080/auth/callback")
+
+        // Simulate the callback URL with a different scheme
+        val state = auth.generateAndSaveState()
+        val callbackUrl = "https://localhost:8080/auth/callback?state=$state&code=test_code"
+
+        // Assert
+        var exception: SignInCallbackHandler.SignInCallbackException? = null
+        try {
+            handler.processCallback(callbackUrl, 8080, "/auth/callback")
+        } catch (e: Exception) {
+            exception = e as? SignInCallbackHandler.SignInCallbackException
+        }
+        assertNotNull(exception)
+        assertEquals(SignInCallbackHandler.SignInCallbackException.ErrorType.INVALID_REDIRECT, exception!!.errorType)
     }
 }
