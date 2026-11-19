@@ -86,11 +86,20 @@ fun Theme(
     val colorScheme = getColorScheme(context, darkTheme, colorMode)
 
     val appTypography = Typography(
-        displayLarge = Typography.Display,
-        headlineLarge = Typography.Headline,
-        titleLarge = Typography.Title,
-        bodyLarge = Typography.Body,
-        labelMedium = Typography.Label
+        displayLarge = Typography.DisplayLarge,
+        displayMedium = Typography.DisplayMedium,
+        displaySmall = Typography.DisplaySmall,
+        headlineLarge = Typography.HeadlineLarge,
+        headlineMedium = Typography.HeadlineMedium,
+        headlineSmall = Typography.HeadlineSmall,
+        titleLarge = Typography.TitleLarge,
+        titleMedium = Typography.TitleMedium,
+        titleSmall = Typography.TitleSmall,
+        bodyLarge = Typography.BodyLarge,
+        bodyMedium = Typography.BodyMedium,
+        labelLarge = Typography.LabelLarge,
+        labelMedium = Typography.LabelMedium,
+        labelSmall = Typography.LabelSmall
     )
 
     MaterialTheme(
