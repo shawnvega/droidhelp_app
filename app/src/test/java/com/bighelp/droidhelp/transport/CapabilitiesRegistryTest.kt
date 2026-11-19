@@ -2,6 +2,7 @@ package com.bighelp.droidhelp.transport
 
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.function.Executable
 
 class CapabilitiesRegistryTest {
 
@@ -124,5 +125,115 @@ class CapabilitiesRegistryTest {
     fun `lookupContext returns null for unknown key`() {
         val registry = CapabilitiesRegistry()
         assertNull(registry.lookupContext("unknown"))
+    }
+
+    @Test
+    fun `retireOwner removes only capabilities registered under that owner`() {
+        val registry = CapabilitiesRegistry()
+        registry.register("a", "v1", owner = "pluginA")
+        registry.register("b", "v2", owner = "pluginB")
+        registry.register("c", "v3", owner = "pluginA")
+        registry.register("d", "v4") // no owner
+
+        assertEquals(4, registry.size())
+        assertEquals(2, registry.retireOwner("pluginA"))
+
+        assertNull(registry.lookup("a"))
+        assertNull(registry.lookup("c"))
+        assertEquals("v2", registry.lookup("b"))
+        assertEquals("v4", registry.lookup("d"))
+        assertEquals(2, registry.size())
+        assertTrue(registry.list().contains("b"))
+        assertTrue(registry.list().contains("d"))
+        assertFalse(registry.list().contains("a"))
+        assertFalse(registry.list().contains("c"))
+    }
+
+    @Test
+    fun `retireOwner returns zero for unknown owner`() {
+        val registry = CapabilitiesRegistry()
+        registry.register("a", "v1", owner = "pluginA")
+
+        assertEquals(0, registry.retireOwner("unknown"))
+        assertEquals(1, registry.size())
+        assertEquals("v1", registry.lookup("a"))
+    }
+
+    @Test
+    fun `retireOwner removes context and owner of retired capabilities`() {
+        val registry = CapabilitiesRegistry()
+        registry.register("a", "v1", context = "ctx", owner = "pluginA")
+
+        assertEquals(1, registry.retireOwner("pluginA"))
+
+        assertNull(registry.lookup("a"))
+        assertNull(registry.lookupContext("a"))
+        assertNull(registry.lookupOwner("a"))
+    }
+
+    @Test
+    fun `lookupOrThrow returns value when present`() {
+        val registry = CapabilitiesRegistry()
+        registry.register("a", "v1", owner = "pluginA")
+
+        assertEquals("v1", registry.lookupOrThrow("a"))
+    }
+
+    @Test
+    fun `lookupOrThrow throws CapabilityNotFoundError for unknown key`() {
+        val registry = CapabilitiesRegistry()
+        registry.register("a", "v1", owner = "pluginA")
+
+        var caught: Throwable? = null
+        try {
+            registry.lookupOrThrow("missing")
+        } catch (ex: Throwable) {
+            caught = ex
+        }
+        assertNotNull(caught)
+        assertTrue(caught is CapabilitiesRegistry.CapabilityNotFoundError)
+        assertTrue(caught!!.message!!.startsWith("Capability not found: "))
+        assertTrue(caught!!.message!!.endsWith("missing"))
+    }
+
+    @Test
+    fun `lookupOrThrow throws for capability retired with its owner`() {
+        val registry = CapabilitiesRegistry()
+        registry.register("a", "v1", owner = "pluginA")
+
+        registry.retireOwner("pluginA")
+
+        var caught: Throwable? = null
+        try {
+            registry.lookupOrThrow("a")
+        } catch (ex: Throwable) {
+            caught = ex
+        }
+        assertNotNull(caught)
+        assertTrue(caught is CapabilitiesRegistry.CapabilityNotFoundError)
+        assertTrue(caught!!.message!!.startsWith("Capability not found: "))
+        assertTrue(caught!!.message!!.endsWith("a"))
+    }
+
+    @Test
+    fun `lookupOwner returns owner when present`() {
+        val registry = CapabilitiesRegistry()
+        registry.register("a", "v1", owner = "pluginA")
+
+        assertEquals("pluginA", registry.lookupOwner("a"))
+    }
+
+    @Test
+    fun `lookupOwner returns null for unknown key`() {
+        val registry = CapabilitiesRegistry()
+        assertNull(registry.lookupOwner("unknown"))
+    }
+
+    @Test
+    fun `lookupOwner returns null for ownerless capability`() {
+        val registry = CapabilitiesRegistry()
+        registry.register("a", "v1")
+
+        assertNull(registry.lookupOwner("a"))
     }
 }
