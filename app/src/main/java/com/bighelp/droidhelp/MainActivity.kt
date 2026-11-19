@@ -5,7 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.remember
 import com.bighelp.droidhelp.app.AppState
-import com.bighelp.droidhelp.app.DroidHelpApp
+import com.bighelp.droidhelp.app.AppComposition
 import com.bighelp.droidhelp.designsystem.ThemeWrapper
 import com.bighelp.droidhelp.home.model.HomeSelection
 
@@ -15,7 +15,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val appState = remember { AppState(HomeSelection()) }
             ThemeWrapper {
-                DroidHelpApp(appState = appState)
+                AppComposition(appState = appState)
             }
         }
     }
