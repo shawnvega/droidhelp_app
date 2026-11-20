@@ -20,7 +20,7 @@ class EventStream(
     private val pauseTimeoutMillis: Long = 5000L // Reduced for testing
 ) : StreamingClient {
 
-    private val _events = Channel<PromptEvent>(capacity = 10) // Bounded channel for backpressure
+    private val _events = Channel<PromptEvent>(capacity = Channel.UNLIMITED)
     private val _currentEntryId = AtomicReference<String?>(null)
     private val _pauseDeferred = AtomicReference<CompletableDeferred<Unit>?>(null)
 
@@ -28,10 +28,7 @@ class EventStream(
         transport.onMessage { message ->
             val event = mapMessageToEvent(message)
             if (event != null) {
-                // Use scope.launch to allow suspension in send() for backpressure
-                scope.launch {
-                    _events.send(event)
-                }
+                _events.trySend(event)
             }
         }
     }

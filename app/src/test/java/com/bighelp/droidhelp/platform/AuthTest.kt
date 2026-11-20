@@ -149,10 +149,13 @@ class AuthTest {
         
         auth.saveTokens("access_old", "refresh_old")
         
-        assertThrows(Auth.TokenReuseException::class.java) {
-            runTest {
-                auth.rotateTokens("refresh_wrong", "access_new", "refresh_new")
-            }
+        val exception = try {
+            auth.rotateTokens("refresh_wrong", "access_new", "refresh_new")
+            null
+        } catch (e: Auth.TokenReuseException) {
+            e
         }
+        
+        assertNotNull(exception)
     }
 }

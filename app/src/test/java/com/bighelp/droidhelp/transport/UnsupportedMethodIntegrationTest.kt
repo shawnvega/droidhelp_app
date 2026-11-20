@@ -12,6 +12,7 @@ class UnsupportedMethodIntegrationTest {
         val sentMessages = mutableListOf<Message>()
         var onMessageCallback: ((Message) -> Unit)? = null
 
+        override suspend fun connect(): Boolean = true
         override fun send(message: Message) {
             sentMessages.add(message)
         }
@@ -28,7 +29,7 @@ class UnsupportedMethodIntegrationTest {
     }
 
     @Test
-    fun testCapabilitiesClientRejectsUnsupportedMessage() {
+    fun testCapabilitiesClientRejectsUnsupportedMessage() = runTest {
         val transport = FakeTransport()
         val client = CapabilitiesClient(transport)
         client.registerHandlers()

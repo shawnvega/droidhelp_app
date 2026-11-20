@@ -3,6 +3,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.compose.compiler)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.detekt)
 }
 
 android {
@@ -42,6 +43,17 @@ android {
         compose = true
     }
 
+    lint {
+        lintConfig = file("lint.xml")
+        abortOnError = true
+        checkReleaseBuilds = true
+        checkDependencies = false
+        warningsAsErrors = false
+        htmlReport = true
+        xmlReport = true
+        textReport = true
+    }
+
     composeOptions {
         // Required by task specification
     }
@@ -79,4 +91,12 @@ dependencies {
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
+}
+
+detekt {
+    config.setFrom(files("$rootDir/detekt.yml"))
+    baseline = file("$projectDir/detekt-baseline.xml")
+    buildUponDefaultConfig = true
+    ignoreFailures = false
+    autoCorrect = false
 }

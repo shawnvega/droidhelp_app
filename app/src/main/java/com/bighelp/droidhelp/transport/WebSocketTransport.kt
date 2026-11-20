@@ -6,10 +6,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.serializer
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -20,24 +22,33 @@ import java.lang.Exception
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
+/** 
+ * An extension to convert WebSocket messages into a ReceiveChannel.
+ */
+fun WebSocket.receiveChannel(channel: Channel<Any>): ReceiveChannel<Any> = channel
+
 class WebSocketTransport(
     private val scope: CoroutineScope,
     private val endpoint: Endpoint,
-    private val headers: Map<String, String> = emptyMap(),
-    private val json: Json = Json,
-    private val maxFrameSize: Int = 1024 * 1024, // 1MB
-    private val maxQueueSize: Int = 1000,
-    private val client: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-        .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-        .writeTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-        .build()
+    private val config: WebSocketConfig = WebSocketConfig()
 ) : Transport {
 
-    private val owners = Owners()
+    data class WebSocketConfig(
+        val headers: Map<String, String> = emptyMap(),
+        val json: Json = Json,
+        val maxFrameSize: Int = DEFAULT_MAX_FRAME_SIZE,
+        val maxQueueSize: Int = DEFAULT_MAX_QUEUE_SIZE,
+        val client: OkHttpClient = OkHttpClient.Builder()
+            .connectTimeout(DEFAULT_CONNECT_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(DEFAULT_READ_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
+            .writeTimeout(DEFAULT_WRITE_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+    )
 
     /** Represents a message paired with its captured socket owner for fencing. */
     private data class FencedMessage(val message: Message, val capturedSocketOwner: SocketOwner)
+
+    private val owners = Owners()
 
     // WebSocket connection state
     private var webSocket: WebSocket? = null
@@ -50,10 +61,10 @@ class WebSocketTransport(
 
     // Message handling
     private val _incomingMessages = MutableStateFlow<Message?>(null)
-    private val incomingChannel = Channel<Any>(Channel.BUFFERED)
+    private val incomingChannel = Channel<Any>(config.maxQueueSize)
 
     // Outbound message queue
-    private val outboundQueue: Channel<FencedMessage> = Channel(maxQueueSize)
+    private val outboundQueue: Channel<FencedMessage> = Channel(config.maxQueueSize)
     private var queueJob: Job? = null
 
     // Correlator stub for request/response correlation
@@ -77,84 +88,90 @@ class WebSocketTransport(
      * Connects to the WebSocket endpoint.
      * @return true if connection successful, false otherwise
      */
-    fun connect(): Boolean {
-        if (isConnecting || isConnected) {
-            return false
-        }
+    override suspend fun connect(): Boolean {
+        return when {
+            isConnected -> true
+            isConnecting -> false
+            else -> {
+                isConnecting = true
+                connectionError = null
+                val connectionResult = kotlinx.coroutines.CompletableDeferred<Boolean>()
 
-        isConnecting = true
-        connectionError = null
+                connectionJob = scope.launch {
+                    try {
+                        val requestBuilder = Request.Builder()
+                            .url(endpoint.canonical)
 
-        connectionJob = scope.launch {
-            try {
-                val requestBuilder = Request.Builder()
-                    .url(endpoint.canonical)
+                        // Add custom headers
+                        config.headers.forEach { (key, value) ->
+                            requestBuilder.addHeader(key, value)
+                        }
 
-                // Add custom headers
-                headers.forEach { (key, value) ->
-                    requestBuilder.addHeader(key, value)
+                        val request = requestBuilder.build()
+
+                        val listener = object : WebSocketListener() {
+                            override fun onOpen(webSocket: WebSocket, response: Response) {
+                                this@WebSocketTransport.webSocket = webSocket
+                                isConnected = true
+                                isConnecting = false
+                                connectionAttempts = 0
+                                _incomingMessages.value = Message.Ready
+                                correlator.start()
+                                
+                                // Increment socket epoch on new connection
+                                owners.incrementSocketEpoch()
+                                
+                                scope.launch {
+                                    receiveMessages(webSocket.receiveChannel(incomingChannel))
+                                }
+                                connectionResult.complete(true)
+                            }
+
+                            override fun onMessage(webSocket: WebSocket, text: String) {
+                                incomingChannel.trySend(text)
+                            }
+
+                            override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                                incomingChannel.trySend(bytes)
+                            }
+
+                            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                                isConnected = false
+                                scheduleReconnect()
+                                incomingChannel.close()
+                            }
+
+                            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                                isConnected = false
+                                isConnecting = false
+                                scheduleReconnect()
+                                incomingChannel.close()
+                            }
+
+                            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                                isConnected = false
+                                isConnecting = false
+                                connectionError = t as? Exception ?: Exception(t)
+                                scheduleReconnect()
+                                incomingChannel.close()
+                                connectionResult.complete(false)
+                            }
+                        }
+
+                        val response = config.client.newWebSocket(request, listener)
+                        this@WebSocketTransport.webSocket = response
+                        connectionResult.await()
+                    } catch (e: Exception) {
+                        connectionError = e
+                        isConnecting = false
+                        scheduleReconnect()
+                        incomingChannel.close()
+                        connectionResult.complete(false)
+                    }
                 }
-
-                val request = requestBuilder.build()
-
-                val listener = object : WebSocketListener() {
-                    override fun onOpen(webSocket: WebSocket, response: Response) {
-                        this@WebSocketTransport.webSocket = webSocket
-                        isConnected = true
-                        isConnecting = false
-                        connectionAttempts = 0
-                        _incomingMessages.value = Message.Ready
-                        correlator.start()
-                        
-                        // Increment socket epoch on new connection
-                        owners.incrementSocketEpoch()
-                        
-                        scope.launch {
-                            receiveMessages()
-                        }
-                    }
-
-                    override fun onMessage(webSocket: WebSocket, text: String) {
-                        scope.launch {
-                            incomingChannel.trySend(text)
-                        }
-                    }
-
-                    override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                        scope.launch {
-                            incomingChannel.trySend(bytes)
-                        }
-                    }
-
-                    override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                        isConnected = false
-                        scheduleReconnect()
-                    }
-
-                    override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                        isConnected = false
-                        isConnecting = false
-                        scheduleReconnect()
-                    }
-
-                    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                        isConnected = false
-                        isConnecting = false
-                        connectionError = t as? Exception ?: Exception(t)
-                        scheduleReconnect()
-                    }
-                }
-
-                val response = client.newWebSocket(request, listener)
-                this@WebSocketTransport.webSocket = response
-            } catch (e: Exception) {
-                connectionError = e
-                isConnecting = false
-                scheduleReconnect()
+                connectionResult.await()
             }
         }
-
-        return true
     }
 
     /** 
@@ -220,7 +237,7 @@ class WebSocketTransport(
      * Performs the actual network send.
      */
     private fun actualSend(message: Message) {
-        val jsonString = json.encodeToString(Message.serializer(), message)
+        val jsonString = config.json.encodeToString(serializer<Message>(), message)
         webSocket?.send(jsonString)
         messagesSent.incrementAndGet()
     }
@@ -231,7 +248,7 @@ class WebSocketTransport(
      */
     private suspend fun handleIncomingText(text: String) {
         try {
-            val message = json.decodeFromString(Message.serializer(), text)
+            val message = config.json.decodeFromString<Message>(text)
             _incomingMessages.value = message
             messagesReceived.incrementAndGet()
             // Submit message to correlator's ordered reader/writer loop
@@ -284,13 +301,11 @@ class WebSocketTransport(
     /** 
      * Receives messages from the WebSocket.
      */
-    private suspend fun receiveMessages() {
-        webSocket?.let { ws ->
-            for (message in incomingChannel) {
-                when (message) {
-                    is String -> handleIncomingText(message)
-                    is ByteString -> handleIncomingBytes(message)
-                }
+    private suspend fun receiveMessages(channel: ReceiveChannel<Any>) {
+        for (message in channel) {
+            when (message) {
+                is String -> handleIncomingText(message)
+                is ByteString -> handleIncomingBytes(message)
             }
         }
     }
@@ -302,7 +317,7 @@ class WebSocketTransport(
     override fun resumeSession(session: Session) {
         ReconnectPolicy.setSession(session)
         SecureInput.bind(session.profile)
-        connect()
+        scope.launch { connect() } // Since connect is suspend, we need to launch it
     }
 
     /** 
@@ -350,7 +365,7 @@ class WebSocketTransport(
      * Returns the number of frames decoded.
      * @return The number of frames decoded
      */
-    fun getFramesDecoded(): Int {
+    fun getFramesDecored(): Int {
         return framesDecoded.get()
     }
 
@@ -384,6 +399,12 @@ class WebSocketTransport(
     }
 
     companion object {
+        const val DEFAULT_MAX_FRAME_SIZE = 1024 * 1024 // 1MB
+        const val DEFAULT_MAX_QUEUE_SIZE = 1000
+        const val DEFAULT_CONNECT_TIMEOUT_SECONDS = 30L
+        const val DEFAULT_READ_TIMEOUT_SECONDS = 0L
+        const val DEFAULT_WRITE_TIMEOUT_SECONDS = 30L
+
         /** 
          * Creates a WebSocketTransport instance.
          * @param endpoint The WebSocket endpoint
@@ -396,7 +417,7 @@ class WebSocketTransport(
             headers: Map<String, String> = emptyMap(),
             scope: CoroutineScope = CoroutineScope(Dispatchers.IO)
         ): WebSocketTransport {
-            return WebSocketTransport(scope, endpoint, headers)
+            return WebSocketTransport(scope, endpoint, WebSocketConfig(headers = headers))
         }
     }
 }

@@ -1,12 +1,10 @@
 package com.bighelp.droidhelp.transport
 
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.test.StandardTestDispatcher
+import com.bighelp.droidhelp.session.Session
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
-import com.bighelp.droidhelp.session.Session
 
 class HeartbeatTest {
 
@@ -14,6 +12,7 @@ class HeartbeatTest {
         val sentMessages = mutableListOf<Message>()
         var onMessageCallback: ((Message) -> Unit)? = null
 
+        override suspend fun connect(): Boolean = true
         override fun send(message: Message) {
             sentMessages.add(message)
         }
@@ -29,7 +28,7 @@ class HeartbeatTest {
         }
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test
     fun testPingSendsAtCorrectInterval() = runTest {
         val transport = FakeTransport()
@@ -49,7 +48,7 @@ class HeartbeatTest {
         heartbeat.stop()
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test
     fun testPongRespondsToPing() = runTest {
         val transport = FakeTransport()
@@ -67,7 +66,7 @@ class HeartbeatTest {
         heartbeat.stop()
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test
     fun testTimeoutDetection() = runTest {
         val transport = FakeTransport()
@@ -89,7 +88,7 @@ class HeartbeatTest {
         heartbeat.stop()
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test
     fun testStartStopLifecycle() = runTest {
         val transport = FakeTransport()
@@ -111,7 +110,7 @@ class HeartbeatTest {
         assertEquals(countAfterStop, transport.sentMessages.size)
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test
     fun testReadySendsOnStart() = runTest {
         val transport = FakeTransport()
@@ -126,7 +125,7 @@ class HeartbeatTest {
         heartbeat.stop()
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test
     fun testReadyIsHandled() = runTest {
         val transport = FakeTransport()

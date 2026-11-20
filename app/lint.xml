@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- Keep resource check non-blocking while screens and assets are under active development -->
+    <issue id="UnusedResources" severity="ignore" />
+
+    <!-- Third-party navigation-compose 2.8.5 ships lint jars compiled against Lint API 14 -->
+    <issue id="ObsoleteLintCustomCheck" severity="warning" />
+
+    <!-- Enforce API compatibility and critical correctness checks -->
+    <issue id="NewApi" severity="error" />
+    <issue id="InlinedApi" severity="warning" />
+    <issue id="MissingPermission" severity="error" />
+</lint>

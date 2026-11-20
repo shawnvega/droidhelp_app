@@ -1,0 +1,148 @@
+<?xml version="1.0" ?>
+<SmellBaseline>
+  <ManuallySuppressedIssues></ManuallySuppressedIssues>
+  <CurrentIssues>
+    <ID>ConstructorParameterNaming:HealthClient.kt$Capabilities$val per_session_exclusive_submit: Boolean? = null</ID>
+    <ID>CyclomaticComplexMethod:ChatsInboxView.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun ChatsInboxView( rows: List&lt;ChatsInboxRow&gt;, onChatClick: (ChatsInboxRow) -&gt; Unit )</ID>
+    <ID>CyclomaticComplexMethod:Endpoint.kt$Endpoint.Companion$fun fromString(url: String): Endpoint</ID>
+    <ID>EmptyFunctionBlock:CapabilitiesClientTest.kt$CapabilitiesClientTest.FakeTransport${}</ID>
+    <ID>EmptyFunctionBlock:EventStreamTest.kt$EventStreamTest.FakeTransport${}</ID>
+    <ID>EmptyFunctionBlock:HeartbeatTest.kt$HeartbeatTest.FakeTransport${}</ID>
+    <ID>EmptyFunctionBlock:PromptSubmitterTest.kt$PromptSubmitterTest.FakeStreamingClient${}</ID>
+    <ID>EmptyFunctionBlock:PromptSubmitterTest.kt$PromptSubmitterTest.FakeStreamingClientNoReceipt${}</ID>
+    <ID>EmptyFunctionBlock:UnsupportedMethodIntegrationTest.kt$UnsupportedMethodIntegrationTest.FakeTransport${}</ID>
+    <ID>ForbiddenComment:AppComposition.kt$// TODO: Implement actual composition logic</ID>
+    <ID>InstanceOfCheckForException:HealthClient.kt$HealthClient$e is IOException</ID>
+    <ID>LongMethod:Endpoint.kt$Endpoint.Companion$fun fromString(url: String): Endpoint</ID>
+    <ID>MagicNumber:Auth.kt$Auth$16</ID>
+    <ID>MagicNumber:Auth.kt$Auth$32</ID>
+    <ID>MagicNumber:Auth.kt$Auth$4</ID>
+    <ID>MagicNumber:Endpoint.kt$0x80</ID>
+    <ID>MagicNumber:Endpoint.kt$0xC0</ID>
+    <ID>MagicNumber:Endpoint.kt$0xFC</ID>
+    <ID>MagicNumber:Endpoint.kt$0xFE</ID>
+    <ID>MagicNumber:Endpoint.kt$0xFF</ID>
+    <ID>MagicNumber:Endpoint.kt$10</ID>
+    <ID>MagicNumber:Endpoint.kt$127</ID>
+    <ID>MagicNumber:Endpoint.kt$15</ID>
+    <ID>MagicNumber:Endpoint.kt$16</ID>
+    <ID>MagicNumber:Endpoint.kt$168</ID>
+    <ID>MagicNumber:Endpoint.kt$169</ID>
+    <ID>MagicNumber:Endpoint.kt$172</ID>
+    <ID>MagicNumber:Endpoint.kt$192</ID>
+    <ID>MagicNumber:Endpoint.kt$254</ID>
+    <ID>MagicNumber:Endpoint.kt$4</ID>
+    <ID>MagicNumber:Endpoint.kt$Endpoint.Companion$3</ID>
+    <ID>MagicNumber:Endpoint.kt$Endpoint.Companion$4</ID>
+    <ID>MagicNumber:Endpoint.kt$Endpoint.Companion$443</ID>
+    <ID>MagicNumber:Endpoint.kt$Endpoint.Companion$5</ID>
+    <ID>MagicNumber:Endpoint.kt$Endpoint.Companion$80</ID>
+    <ID>MagicNumber:Entry.kt$Entry.Companion$3</ID>
+    <ID>MagicNumber:Entry.kt$Entry.Companion$4</ID>
+    <ID>MagicNumber:RpcCorrelator.kt$RpcCorrelator$100</ID>
+    <ID>MagicNumber:RpcCorrelator.kt$RpcCorrelator$5000</ID>
+    <ID>MagicNumber:RpcCorrelator.kt$RpcCorrelator.PendingOperation$5_000_000_000L</ID>
+    <ID>MagicNumber:SqliteVersionedDatabase.kt$SqliteVersionedDatabase$3</ID>
+    <ID>MagicNumber:VersionedDatabase.kt$FileBasedVersionedDatabase$3</ID>
+    <ID>MagicNumber:WebSocketTransport.kt$WebSocketTransport$10</ID>
+    <ID>MagicNumber:WebSocketTransport.kt$WebSocketTransport$100</ID>
+    <ID>MagicNumber:WebSocketTransport.kt$WebSocketTransport$1000</ID>
+    <ID>MatchingDeclarationName:Capabilities.kt$CapabilitiesRegistry</ID>
+    <ID>MatchingDeclarationName:SearchModels.kt$SearchFilter</ID>
+    <ID>MatchingDeclarationName:Theme.kt$ColorMode</ID>
+    <ID>MatchingDeclarationName:Type.kt$Typography</ID>
+    <ID>MaxLineLength:ChatsInboxModels.kt$ChatsInboxSource$FleetChat : ChatsInboxSource</ID>
+    <ID>MaxLineLength:ChatsInboxModels.kt$ChatsInboxSource$FleetGroup : ChatsInboxSource</ID>
+    <ID>MaxLineLength:ChatsInboxView.kt$Box(modifier = Modifier.size(8.dp).clip(androidx.compose.foundation.shape.CircleShape).background(Color.Blue))</ID>
+    <ID>MaxLineLength:ChatsInboxView.kt$Icon(Icons.Default.Star, contentDescription = "Pinned", modifier = Modifier.size(16.dp), tint = Color.Gray)</ID>
+    <ID>MaxLineLength:ChatsInboxView.kt$style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, color = Color.Gray)</ID>
+    <ID>MaxLineLength:ChatsInboxView.kt$val yesterday = filteredRows.filter { !it.isPinned &amp;&amp; it.updatedAt &lt; startOfToday &amp;&amp; it.updatedAt &gt;= startOfYesterday }</ID>
+    <ID>MaxLineLength:EventStream.kt$EventStream$throw IllegalStateException("Out-of-order event received: ${event.timestamp} is not after $lastTimestamp")</ID>
+    <ID>MaxLineLength:EventStream.kt$EventStream$throw IllegalStateException("Timeout waiting for ${event.type} response after ${pauseTimeoutMillis}ms")</ID>
+    <ID>MaxLineLength:HeartbeatTest.kt$HeartbeatTest$val heartbeat = Heartbeat(transport, 100L, timeoutTolerance = 2.0, scope = this, currentTimeMillis = { testScheduler.currentTime })</ID>
+    <ID>MaxLineLength:SignInCallbackHandler.kt$OkHttpClientImpl$override suspend</ID>
+    <ID>MaxLineLength:SignInCallbackHandler.kt$OkHttpClientImpl$val requestBody = body.entries.joinToString("&amp;") { "${java.net.URLEncoder.encode(it.key, "UTF-8")}=${java.net.URLEncoder.encode(it.value, "UTF-8")}" }</ID>
+    <ID>MaxLineLength:SignInCallbackHandlerTest.kt$SignInCallbackHandlerTest$assertEquals(SignInCallbackHandler.SignInCallbackException.ErrorType.TOKEN_EXCHANGE_FAILED, exception!!.errorType)</ID>
+    <ID>MaxLineLength:SqliteVersionedDatabase.kt$SqliteVersionedDatabase$connection.prepareStatement("INSERT INTO versioned_records (key, version, value) VALUES (?, ?, ?)")</ID>
+    <ID>MaxLineLength:SqliteVersionedDatabase.kt$SqliteVersionedDatabase$connection.prepareStatement("SELECT value FROM versioned_records WHERE key = ? AND version BETWEEN ? AND ?")</ID>
+    <ID>MaxLineLength:SqliteVersionedDatabase.kt$SqliteVersionedDatabase$connection.prepareStatement("SELECT version FROM versioned_records WHERE key = ? ORDER BY version ASC")</ID>
+    <ID>MaxLineLength:SubmissionJournalImpl.kt$SubmissionJournalImpl$override suspend</ID>
+    <ID>NestedBlockDepth:Endpoint.kt$Endpoint.Companion$fun fromString(url: String): Endpoint</ID>
+    <ID>NestedBlockDepth:SignInCallbackHandler.kt$SignInCallbackHandler$private fun parseCallbackUrl(callbackUrl: String): ParsedCallbackData</ID>
+    <ID>NewLineAtEndOfFile:AndroidSecureStorageTest.kt$com.bighelp.droidhelp.platform.AndroidSecureStorageTest.kt</ID>
+    <ID>NewLineAtEndOfFile:CapabilitiesRegistryTest.kt$com.bighelp.droidhelp.transport.CapabilitiesRegistryTest.kt</ID>
+    <ID>NewLineAtEndOfFile:Message.kt$com.bighelp.droidhelp.transport.Message.kt</ID>
+    <ID>NewLineAtEndOfFile:SessionCoordinator.kt$com.bighelp.droidhelp.session.SessionCoordinator.kt</ID>
+    <ID>NewLineAtEndOfFile:Type.kt$com.bighelp.droidhelp.designsystem.Type.kt</ID>
+    <ID>ReturnCount:Endpoint.kt$fun requireTls(endpoint: Endpoint): Boolean</ID>
+    <ID>ReturnCount:Endpoint.kt$private fun isPrivateIPv6(addr: Inet6Address): Boolean</ID>
+    <ID>SwallowedException:Endpoint.kt$e: UnknownHostException</ID>
+    <ID>SwallowedException:EventStream.kt$EventStream$e: TimeoutCancellationException</ID>
+    <ID>SwallowedException:WebSocketTransport.kt$WebSocketTransport$e: Exception</ID>
+    <ID>ThrowsCount:BrowserAuthentication.kt$BrowserAuthenticationCallback$fun validate(incomingUrl: URI, queryParameters: Map&lt;String, String&gt;): String</ID>
+    <ID>ThrowsCount:Endpoint.kt$Endpoint.Companion$fun fromString(url: String): Endpoint</ID>
+    <ID>ThrowsCount:SignInCallbackHandler.kt$SignInCallbackHandler$private fun parseCallbackUrl(callbackUrl: String): ParsedCallbackData</ID>
+    <ID>ThrowsCount:SignInCallbackHandler.kt$SignInCallbackHandler$private suspend fun exchangeCodeWithPKCE( code: String, verifier: String ): Pair&lt;String, String&gt;</ID>
+    <ID>ThrowsCount:SignInCallbackHandler.kt$SignInCallbackHandler$suspend fun processCallback( callbackUrl: String, expectedPort: Int, expectedPath: String ): Pair&lt;String, String&gt;</ID>
+    <ID>TooGenericExceptionCaught:HealthClient.kt$HealthClient$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:SignInCallbackHandler.kt$SignInCallbackHandler$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:SqliteVersionedDatabase.kt$SqliteVersionedDatabase$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:SubmissionJournal.kt$SubmissionJournal$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:WebSocketTransport.kt$WebSocketTransport$e: Exception</ID>
+    <ID>TooManyFunctions:Auth.kt$Auth</ID>
+    <ID>TooManyFunctions:WebSocketTransport.kt$WebSocketTransport : Transport</ID>
+    <ID>UnusedParameter:AppComposition.kt$appState: AppState</ID>
+    <ID>UnusedParameter:CapabilitiesClient.kt$CapabilitiesClient$request: Message.CapabilitiesRequest</ID>
+    <ID>UnusedParameter:SessionCoordinator.kt$SessionCoordinator$source: String</ID>
+    <ID>UnusedParameter:WebSocketTransport.kt$WebSocketTransport$bytes: ByteString</ID>
+    <ID>UnusedPrivateProperty:ChatsInboxView.kt$val now = Calendar.getInstance().time</ID>
+    <ID>UnusedPrivateProperty:EventStream.kt$EventStream$private val scope: CoroutineScope</ID>
+    <ID>UnusedPrivateProperty:SignInCallbackHandlerTest.kt$SignInCallbackHandlerTest$val verifier = auth.generateCodeVerifier()</ID>
+    <ID>UnusedPrivateProperty:WebSocketTransport.kt$WebSocketTransport$// Frame processing private val pendingFrames = ConcurrentHashMap&lt;String, MutableList&lt;ByteString&gt;&gt;() // frameId -&gt; chunks</ID>
+    <ID>UseCheckOrError:EventStream.kt$EventStream$throw IllegalStateException("No active submission")</ID>
+    <ID>UseCheckOrError:EventStream.kt$EventStream$throw IllegalStateException("Out-of-order event received: ${event.timestamp} is not after $lastTimestamp")</ID>
+    <ID>UseCheckOrError:EventStream.kt$EventStream$throw IllegalStateException("Timeout waiting for ${event.type} response after ${pauseTimeoutMillis}ms")</ID>
+    <ID>UseCheckOrError:WebSocketTransport.kt$WebSocketTransport$throw IllegalStateException("No SocketOwner available. Call connect() or resumeSession() first.")</ID>
+    <ID>UseRequire:Endpoint.kt$Endpoint.Companion$throw IllegalArgumentException( "Invalid characters after IPv6 host in endpoint URL: '$url'" )</ID>
+    <ID>UseRequire:Endpoint.kt$Endpoint.Companion$throw IllegalArgumentException( "Invalid encoded endpoint string: expected 5 pipe-separated parts, got ${parts.size}" )</ID>
+    <ID>UseRequire:Endpoint.kt$Endpoint.Companion$throw IllegalArgumentException( "Unsupported scheme '$scheme'; only 'http' and 'https' are allowed" )</ID>
+    <ID>UseRequire:Endpoint.kt$Endpoint.Companion$throw IllegalArgumentException("Endpoint URL cannot be empty")</ID>
+    <ID>UseRequire:Endpoint.kt$Endpoint.Companion$throw IllegalArgumentException("Malformed IPv6 host in endpoint URL: '$url'")</ID>
+    <ID>UseRequire:Endpoint.kt$Endpoint.Companion$throw IllegalArgumentException("Missing '://' in endpoint URL: '$url'")</ID>
+    <ID>UseRequire:Endpoint.kt$Endpoint.Companion$throw IllegalArgumentException("Missing host in endpoint URL: '$url'")</ID>
+    <ID>UseRequire:Endpoint.kt$Endpoint.Companion$throw IllegalArgumentException("Missing port after ':' in endpoint URL: '$url'")</ID>
+    <ID>WildcardImport:AppComposition.kt$import androidx.compose.runtime.*</ID>
+    <ID>WildcardImport:AppComposition.kt$import com.bighelp.droidhelp.home.model.*</ID>
+    <ID>WildcardImport:AuthTest.kt$import org.junit.jupiter.api.Assertions.*</ID>
+    <ID>WildcardImport:CapabilitiesRegistryTest.kt$import org.junit.jupiter.api.Assertions.*</ID>
+    <ID>WildcardImport:ChatPerformanceTest.kt$import org.junit.jupiter.api.Assertions.*</ID>
+    <ID>WildcardImport:ChatsInboxView.kt$import androidx.compose.foundation.layout.*</ID>
+    <ID>WildcardImport:ChatsInboxView.kt$import androidx.compose.material3.*</ID>
+    <ID>WildcardImport:ChatsInboxView.kt$import androidx.compose.runtime.*</ID>
+    <ID>WildcardImport:ChatsInboxView.kt$import com.bighelp.droidhelp.home.model.*</ID>
+    <ID>WildcardImport:DroidHelpApp.kt$import androidx.compose.runtime.*</ID>
+    <ID>WildcardImport:DroidHelpApp.kt$import com.bighelp.droidhelp.home.model.*</ID>
+    <ID>WildcardImport:EndpointTest.kt$import org.junit.jupiter.api.Assertions.*</ID>
+    <ID>WildcardImport:EventStream.kt$import kotlinx.coroutines.*</ID>
+    <ID>WildcardImport:EventStream.kt$import kotlinx.coroutines.flow.*</ID>
+    <ID>WildcardImport:Heartbeat.kt$import kotlinx.coroutines.*</ID>
+    <ID>WildcardImport:HomeHeaderBar.kt$import androidx.compose.foundation.layout.*</ID>
+    <ID>WildcardImport:HomeHeaderBar.kt$import androidx.compose.material.icons.filled.*</ID>
+    <ID>WildcardImport:HomeHeaderBar.kt$import androidx.compose.material3.*</ID>
+    <ID>WildcardImport:PromptSubmitterTest.kt$import org.junit.jupiter.api.Assertions.*</ID>
+    <ID>WildcardImport:RpcCorrelatorTest.kt$import org.junit.jupiter.api.Assertions.*</ID>
+    <ID>WildcardImport:SearchScreen.kt$import androidx.compose.foundation.layout.*</ID>
+    <ID>WildcardImport:SearchScreen.kt$import androidx.compose.material3.*</ID>
+    <ID>WildcardImport:SearchScreen.kt$import androidx.compose.runtime.*</ID>
+    <ID>WildcardImport:SessionCoordinatorTest.kt$import org.junit.jupiter.api.Assertions.*</ID>
+    <ID>WildcardImport:SignInCallbackHandlerTest.kt$import okhttp3.*</ID>
+    <ID>WildcardImport:SignInCallbackHandlerTest.kt$import org.junit.jupiter.api.Assertions.*</ID>
+    <ID>WildcardImport:SubmissionJournalTest.kt$import org.junit.jupiter.api.Assertions.*</ID>
+    <ID>WildcardImport:Theme.kt$import androidx.compose.material3.*</ID>
+    <ID>WildcardImport:WorkView.kt$import androidx.compose.foundation.layout.*</ID>
+    <ID>WildcardImport:WorkView.kt$import androidx.compose.material3.*</ID>
+    <ID>WildcardImport:WorkView.kt$import androidx.compose.runtime.*</ID>
+    <ID>WildcardImport:WorkView.kt$import com.bighelp.droidhelp.home.model.*</ID>
+    <ID>WildcardImport:WorkViewModel.kt$import com.bighelp.droidhelp.home.model.*</ID>
+  </CurrentIssues>
+</SmellBaseline>
