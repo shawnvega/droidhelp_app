@@ -46,9 +46,35 @@ class HealthClientTest {
 
         assertEquals(true, response.gateway.ready)
         assertEquals(true, response.gateway.capabilities.per_session_exclusive_submit)
+        assertEquals(null, response.gateway.capabilities.turnQueue)
+        assertEquals(null, response.gateway.capabilities.turnInterrupt)
         
         val recordedRequest = server.takeRequest()
         assertEquals("/api/health", recordedRequest.path)
+    }
+
+    @Test
+    fun `getHealth parses optional turn_queue and turn_interrupt capabilities`() = runTest {
+        val jsonResponse = """
+            {
+                "gateway": {
+                    "ready": true,
+                    "capabilities": {
+                        "per_session_exclusive_submit": true,
+                        "turn_queue": true,
+                        "turn_interrupt": false
+                    }
+                }
+            }
+        """.trimIndent()
+        server.enqueue(MockResponse().setBody(jsonResponse).setResponseCode(200))
+
+        val response = client.getHealth()
+
+        assertEquals(true, response.gateway.ready)
+        assertEquals(true, response.gateway.capabilities.per_session_exclusive_submit)
+        assertEquals(true, response.gateway.capabilities.turnQueue)
+        assertEquals(false, response.gateway.capabilities.turnInterrupt)
     }
 
     @Test

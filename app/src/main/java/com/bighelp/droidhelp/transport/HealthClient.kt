@@ -2,6 +2,7 @@ package com.bighelp.droidhelp.transport
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
@@ -21,7 +22,11 @@ data class Gateway(
 
 @Serializable
 data class Capabilities(
-    val per_session_exclusive_submit: Boolean? = null
+    val per_session_exclusive_submit: Boolean? = null,
+    @SerialName("turn_queue")
+    val turnQueue: Boolean? = null,
+    @SerialName("turn_interrupt")
+    val turnInterrupt: Boolean? = null,
 )
 
 class HealthClient(

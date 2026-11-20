@@ -227,6 +227,7 @@ class TurnControlTest {
         val control = TurnControl(
             dispatcher = dispatcher,
             idGenerator = sequentialIdGenerator("q"),
+            capabilities = TurnControlCapabilities.FULL,
         )
 
         val turn1 = (control.submit("Task 1", turnId = "turn-1") as TurnControlResult.Started).turn
@@ -278,7 +279,10 @@ class TurnControlTest {
 
     @Test
     fun `explicit queue mode when idle starts immediately`() = runTest {
-        val control = TurnControl(idGenerator = sequentialIdGenerator("idle"))
+        val control = TurnControl(
+            idGenerator = sequentialIdGenerator("idle"),
+            capabilities = TurnControlCapabilities.FULL,
+        )
         val result = control.submit("First when idle", mode = TurnControlMode.QUEUE)
         assertTrue(result is TurnControlResult.Started)
         assertTrue(control.queuedInputs.isEmpty())
@@ -291,6 +295,7 @@ class TurnControlTest {
         val control = TurnControl(
             dispatcher = dispatcher,
             idGenerator = sequentialIdGenerator("int"),
+            capabilities = TurnControlCapabilities.FULL,
         )
 
         val turn1 = (control.submit("Long task", turnId = "turn-1") as TurnControlResult.Started).turn
@@ -321,6 +326,7 @@ class TurnControlTest {
         val control = TurnControl(
             dispatcher = dispatcher,
             idGenerator = sequentialIdGenerator("x"),
+            capabilities = TurnControlCapabilities.FULL,
         )
 
         // Idle interrupt without expectedTurnId is a no-op returning null.
@@ -383,6 +389,7 @@ class TurnControlTest {
         val control = TurnControl(
             dispatcher = dispatcher,
             idGenerator = sequentialIdGenerator("f"),
+            capabilities = TurnControlCapabilities.FULL,
         )
 
         // 1. Failure on start leaves controller idle and does not burn turn sequence.
