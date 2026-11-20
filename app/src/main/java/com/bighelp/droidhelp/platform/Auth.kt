@@ -1,7 +1,9 @@
 package com.bighelp.droidhelp.platform
 
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
@@ -36,7 +38,7 @@ class Auth(private val secureStorage: SecureStorage) {
         private const val CONSUMED_REFRESH_TOKENS_KEY = "consumed_refresh_tokens"
 
         /** Upper bound on retained digests so the registry cannot grow forever. */
-        private const val MAX_CONSUMED_TOKENS = 64
+        const val MAX_CONSUMED_TOKENS = 64
 
         /** PKCE code challenge method per RFC 7636 Section 4.3. */
         const val CODE_CHALLENGE_METHOD_S256 = "S256"
@@ -161,14 +163,43 @@ class Auth(private val secureStorage: SecureStorage) {
     }
 
     /**
-     * Stores the access and refresh tokens.
-     * 
+     * Stores the access and refresh tokens via [SecureStorage].
+     *
+     * Rejects blank tokens and refuses to store a [refreshToken] that has already
+     * been consumed during an earlier rotation. If persisting the refresh token
+     * fails, the previous access token state is restored.
+     *
      * @param accessToken The new access token.
      * @param refreshToken The new refresh token.
+     * @throws IllegalArgumentException if either token is blank.
+     * @throws TokenReuseException if [refreshToken] was previously consumed.
      */
-    suspend fun saveTokens(accessToken: String, refreshToken: String) = mutex.withLock {
-        secureStorage.saveString(ACCESS_TOKEN_KEY, accessToken)
-        secureStorage.saveString(REFRESH_TOKEN_KEY, refreshToken)
+    suspend fun saveTokens(accessToken: String, refreshToken: String) {
+        require(accessToken.isNotBlank()) { "Access token must not be blank" }
+        require(refreshToken.isNotBlank()) { "Refresh token must not be blank" }
+
+        mutex.withLock {
+            val consumedDigests = loadConsumedDigests()
+            if (containsDigest(consumedDigests, digest(refreshToken))) {
+                throw TokenReuseException("Refresh token reuse detected!")
+            }
+
+            val previousAccessToken = secureStorage.getString(ACCESS_TOKEN_KEY)
+            var accessSaved = false
+            var committed = false
+            try {
+                secureStorage.saveString(ACCESS_TOKEN_KEY, accessToken)
+                accessSaved = true
+                secureStorage.saveString(REFRESH_TOKEN_KEY, refreshToken)
+                committed = true
+            } finally {
+                if (!committed && accessSaved) {
+                    withContext(NonCancellable) {
+                        runCatching { restoreOrDelete(ACCESS_TOKEN_KEY, previousAccessToken) }
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -237,22 +268,43 @@ class Auth(private val secureStorage: SecureStorage) {
             // 2. Compare-and-swap: the presented token must be the one we currently hold.
             //    A different stored token means ours was already rotated away elsewhere.
             val current = secureStorage.getString(REFRESH_TOKEN_KEY)
-            val isReuseDetected = consumedDigests.contains(oldDigest) ||
+            val isReuseDetected = containsDigest(consumedDigests, oldDigest) ||
                 (current != null && !constantTimeEquals(current, oldRefreshToken)) ||
-                (!isSameToken && consumedDigests.contains(digest(newRefreshToken)))
+                (!isSameToken && containsDigest(consumedDigests, digest(newRefreshToken)))
 
             if (isReuseDetected) {
                 throw TokenReuseException("Refresh token reuse detected!")
             }
 
-            // 3. Persist the new pair, then retire the old token.
-            secureStorage.saveString(ACCESS_TOKEN_KEY, newAccessToken)
-            secureStorage.saveString(REFRESH_TOKEN_KEY, newRefreshToken)
+            // 3. Persist the new pair and retire the old token atomically with rollback
+            //    so a partial storage failure never leaves torn credentials behind.
+            val previousAccessToken = secureStorage.getString(ACCESS_TOKEN_KEY)
+            var accessSaved = false
+            var refreshSaved = false
+            var committed = false
+            try {
+                secureStorage.saveString(ACCESS_TOKEN_KEY, newAccessToken)
+                accessSaved = true
+                secureStorage.saveString(REFRESH_TOKEN_KEY, newRefreshToken)
+                refreshSaved = true
 
-            // A non-rotating server may hand back the same token; only retire it when
-            // the value actually changed, otherwise we would lock ourselves out.
-            if (!isSameToken) {
-                markConsumed(oldDigest, consumedDigests)
+                // A non-rotating server may hand back the same token; only retire it when
+                // the value actually changed, otherwise we would lock ourselves out.
+                if (!isSameToken) {
+                    markConsumed(oldDigest, consumedDigests)
+                }
+                committed = true
+            } finally {
+                if (!committed) {
+                    withContext(NonCancellable) {
+                        if (refreshSaved) {
+                            runCatching { restoreOrDelete(REFRESH_TOKEN_KEY, current) }
+                        }
+                        if (accessSaved) {
+                            runCatching { restoreOrDelete(ACCESS_TOKEN_KEY, previousAccessToken) }
+                        }
+                    }
+                }
             }
         }
     }
@@ -261,13 +313,16 @@ class Auth(private val secureStorage: SecureStorage) {
      * Returns true if [refreshToken] has already been exchanged via [rotateTokens]
      * and must therefore be rejected as reused.
      */
-    suspend fun isRefreshTokenConsumed(refreshToken: String): Boolean = mutex.withLock {
-        loadConsumedDigests().contains(digest(refreshToken))
+    suspend fun isRefreshTokenConsumed(refreshToken: String): Boolean {
+        if (refreshToken.isBlank()) return false
+        return mutex.withLock {
+            containsDigest(loadConsumedDigests(), digest(refreshToken))
+        }
     }
 
     private suspend fun markConsumed(digest: String, existingDigests: List<String>) {
         val digests = existingDigests.toMutableList()
-        if (!digests.contains(digest)) {
+        if (!containsDigest(digests, digest)) {
             digests.add(digest)
         }
         // Keep only the most recent entries so the registry stays bounded.
@@ -278,6 +333,17 @@ class Auth(private val secureStorage: SecureStorage) {
         }
         secureStorage.saveString(CONSUMED_REFRESH_TOKENS_KEY, trimmed.joinToString("\n"))
     }
+
+    private suspend fun restoreOrDelete(key: String, previousValue: String?) {
+        if (previousValue != null) {
+            secureStorage.saveString(key, previousValue)
+        } else {
+            secureStorage.delete(key)
+        }
+    }
+
+    private fun containsDigest(digests: List<String>, targetDigest: String): Boolean =
+        digests.fold(false) { matched, entry -> matched or constantTimeEquals(entry, targetDigest) }
 
     private suspend fun loadConsumedDigests(): List<String> {
         val raw = secureStorage.getString(CONSUMED_REFRESH_TOKENS_KEY) ?: return emptyList()

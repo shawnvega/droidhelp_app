@@ -381,5 +381,225 @@ class AuthTest {
         assertEquals(1, results.count { !it })
         assertNull(baseStorage.getString("oauth_state"))
     }
+
+    @Test
+    fun testRotateTokensPersistsToSecureStorageAsDigestsAcrossRestarts() = runTest {
+        val storage = FakeSecureStorage()
+        val auth = Auth(storage)
+
+        auth.saveTokens("access_1", "refresh_1")
+        auth.rotateTokens("refresh_1", "access_2", "refresh_2")
+
+        assertEquals("access_2", storage.getString("access_token"))
+        assertEquals("refresh_2", storage.getString("refresh_token"))
+
+        auth.rotateTokens("refresh_2", "access_3", "refresh_3")
+
+        assertEquals("access_3", storage.getString("access_token"))
+        assertEquals("refresh_3", storage.getString("refresh_token"))
+
+        val consumedRaw = storage.getString("consumed_refresh_tokens")
+        assertNotNull(consumedRaw)
+        assertFalse(consumedRaw!!.contains("refresh_1"))
+        assertFalse(consumedRaw.contains("refresh_2"))
+        assertFalse(consumedRaw.contains("refresh_3"))
+
+        val digestLines = consumedRaw.split('\n').filter { it.isNotBlank() }
+        assertEquals(2, digestLines.size)
+        val sha256HexRegex = Regex("^[0-9a-f]{64}$")
+        for (digestLine in digestLines) {
+            assertTrue(sha256HexRegex.matches(digestLine))
+        }
+
+        // Simulate process restart with a fresh Auth instance over the same SecureStorage
+        val restartedAuth = Auth(storage)
+        assertEquals("access_3", restartedAuth.getAccessToken())
+        assertEquals("refresh_3", restartedAuth.getRefreshToken())
+        assertTrue(restartedAuth.isRefreshTokenConsumed("refresh_1"))
+        assertTrue(restartedAuth.isRefreshTokenConsumed("refresh_2"))
+        assertFalse(restartedAuth.isRefreshTokenConsumed("refresh_3"))
+
+        val replayAfterRestart = runCatching {
+            restartedAuth.rotateTokens("refresh_1", "access_bad", "refresh_bad")
+        }.exceptionOrNull()
+        assertTrue(replayAfterRestart is Auth.TokenReuseException)
+        assertEquals("access_3", restartedAuth.getAccessToken())
+        assertEquals("refresh_3", restartedAuth.getRefreshToken())
+    }
+
+    @Test
+    fun testSaveTokensAndRotateTokensRejectBlankInputs() = runTest {
+        val storage = FakeSecureStorage()
+        val auth = Auth(storage)
+
+        assertTrue(runCatching { auth.saveTokens("", "refresh_1") }.exceptionOrNull() is IllegalArgumentException)
+        assertTrue(runCatching { auth.saveTokens("access_1", "   ") }.exceptionOrNull() is IllegalArgumentException)
+        assertNull(storage.getString("access_token"))
+        assertNull(storage.getString("refresh_token"))
+
+        auth.saveTokens("access_1", "refresh_1")
+
+        val blankOld = runCatching {
+            auth.rotateTokens("", "access_2", "refresh_2")
+        }.exceptionOrNull()
+        val blankAccess = runCatching {
+            auth.rotateTokens("refresh_1", "  ", "refresh_2")
+        }.exceptionOrNull()
+        val blankRefresh = runCatching {
+            auth.rotateTokens("refresh_1", "access_2", "\t")
+        }.exceptionOrNull()
+        assertTrue(blankOld is IllegalArgumentException)
+        assertTrue(blankAccess is IllegalArgumentException)
+        assertTrue(blankRefresh is IllegalArgumentException)
+
+        assertEquals("access_1", auth.getAccessToken())
+        assertEquals("refresh_1", auth.getRefreshToken())
+        assertFalse(auth.isRefreshTokenConsumed("refresh_1"))
+        assertFalse(auth.isRefreshTokenConsumed(""))
+        assertFalse(auth.isRefreshTokenConsumed("   "))
+    }
+
+    @Test
+    fun testSaveTokensRejectsPreviouslyConsumedRefreshToken() = runTest {
+        val storage = FakeSecureStorage()
+        val auth = Auth(storage)
+
+        auth.saveTokens("access_1", "refresh_1")
+        auth.rotateTokens("refresh_1", "access_2", "refresh_2")
+
+        // Attempting to reinstall consumed refresh_1 via saveTokens is rejected
+        val activeReuseException = runCatching {
+            auth.saveTokens("access_replayed", "refresh_1")
+        }.exceptionOrNull()
+        assertTrue(activeReuseException is Auth.TokenReuseException)
+        assertEquals("access_2", auth.getAccessToken())
+        assertEquals("refresh_2", auth.getRefreshToken())
+
+        // Consumed rejection still applies after clearTokens()
+        auth.clearTokens()
+        val postClearReuseException = runCatching {
+            auth.saveTokens("access_replayed", "refresh_1")
+        }.exceptionOrNull()
+        assertTrue(postClearReuseException is Auth.TokenReuseException)
+        assertNull(auth.getAccessToken())
+        assertNull(auth.getRefreshToken())
+    }
+
+    @Test
+    fun testNonRotatingReplayOfConsumedTokenIsRejected() = runTest {
+        val storage = FakeSecureStorage()
+        val auth = Auth(storage)
+
+        auth.saveTokens("access_1", "refresh_1")
+        auth.rotateTokens("refresh_1", "access_2", "refresh_2")
+        auth.clearTokens()
+
+        // Even when oldRefreshToken == newRefreshToken, an already-consumed token must be rejected
+        val replayException = runCatching {
+            auth.rotateTokens("refresh_1", "access_3", "refresh_1")
+        }.exceptionOrNull()
+        assertTrue(replayException is Auth.TokenReuseException)
+        assertNull(auth.getAccessToken())
+        assertNull(auth.getRefreshToken())
+    }
+
+    @Test
+    fun testRejectedReuseAttemptsDoNotPolluteOrEvictConsumedRegistry() = runTest {
+        val storage = FakeSecureStorage()
+        val auth = Auth(storage)
+
+        auth.saveTokens("access_1", "refresh_1")
+        auth.rotateTokens("refresh_1", "access_2", "refresh_2")
+        assertTrue(auth.isRefreshTokenConsumed("refresh_1"))
+
+        for (i in 0 until Auth.MAX_CONSUMED_TOKENS + 10) {
+            val err = runCatching {
+                auth.rotateTokens("bogus_token_$i", "access_bad_$i", "refresh_bad_$i")
+            }.exceptionOrNull()
+            assertTrue(err is Auth.TokenReuseException)
+            assertFalse(auth.isRefreshTokenConsumed("bogus_token_$i"))
+        }
+
+        assertTrue(auth.isRefreshTokenConsumed("refresh_1"))
+        assertEquals("access_2", auth.getAccessToken())
+        assertEquals("refresh_2", auth.getRefreshToken())
+    }
+
+    @Test
+    fun testRotateTokensRollsBackOnRefreshTokenWriteFailure() = runTest {
+        val baseStorage = FakeSecureStorage()
+        var failKey: String? = null
+        val failingStorage = object : SecureStorage by baseStorage {
+            override suspend fun saveString(key: String, value: String) {
+                if (key == failKey) {
+                    error("Simulated storage failure on $key")
+                }
+                baseStorage.saveString(key, value)
+            }
+        }
+        val auth = Auth(failingStorage)
+        auth.saveTokens("access_1", "refresh_1")
+
+        // Failure while saving refresh_token rolls back access_token
+        failKey = "refresh_token"
+        val refreshFail = runCatching {
+            auth.rotateTokens("refresh_1", "access_2", "refresh_2")
+        }.exceptionOrNull()
+        assertTrue(refreshFail is IllegalStateException)
+        failKey = null
+        assertEquals("access_1", auth.getAccessToken())
+        assertEquals("refresh_1", auth.getRefreshToken())
+        assertFalse(auth.isRefreshTokenConsumed("refresh_1"))
+
+        // Failure while recording consumed digest rolls back both tokens
+        failKey = "consumed_refresh_tokens"
+        val consumedFail = runCatching {
+            auth.rotateTokens("refresh_1", "access_2", "refresh_2")
+        }.exceptionOrNull()
+        assertTrue(consumedFail is IllegalStateException)
+        failKey = null
+        assertEquals("access_1", auth.getAccessToken())
+        assertEquals("refresh_1", auth.getRefreshToken())
+        assertFalse(auth.isRefreshTokenConsumed("refresh_1"))
+
+        // Once storage recovers, rotation with refresh_1 succeeds cleanly
+        auth.rotateTokens("refresh_1", "access_2", "refresh_2")
+        assertEquals("access_2", auth.getAccessToken())
+        assertEquals("refresh_2", auth.getRefreshToken())
+        assertTrue(auth.isRefreshTokenConsumed("refresh_1"))
+    }
+
+    @Test
+    fun testSaveTokensRollsBackAccessTokenOnRefreshWriteFailure() = runTest {
+        val baseStorage = FakeSecureStorage()
+        var failRefreshWrite = true
+        val failingStorage = object : SecureStorage by baseStorage {
+            override suspend fun saveString(key: String, value: String) {
+                if (failRefreshWrite && key == "refresh_token") {
+                    error("Simulated refresh write failure")
+                }
+                baseStorage.saveString(key, value)
+            }
+        }
+        val auth = Auth(failingStorage)
+
+        val err = runCatching {
+            auth.saveTokens("access_1", "refresh_1")
+        }.exceptionOrNull()
+        assertTrue(err is IllegalStateException)
+        assertNull(baseStorage.getString("access_token"))
+        assertNull(baseStorage.getString("refresh_token"))
+
+        failRefreshWrite = false
+        auth.saveTokens("access_1", "refresh_1")
+        failRefreshWrite = true
+
+        val overwriteErr = runCatching {
+            auth.saveTokens("access_2", "refresh_2")
+        }.exceptionOrNull()
+        assertTrue(overwriteErr is IllegalStateException)
+        assertEquals("access_1", baseStorage.getString("access_token"))
+        assertEquals("refresh_1", baseStorage.getString("refresh_token"))
+    }
 }
 
