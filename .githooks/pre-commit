@@ -1,0 +1,10 @@
+#!/bin/sh
+echo "Running detekt pre-commit hook..."
+./gradlew detekt
+EXIT_CODE=$?
+if [ $EXIT_CODE -ne 0 ]; then
+    echo "Detekt found issues. Commit aborted."
+    exit $EXIT_CODE
+fi
+echo "Detekt passed!"
+exit 0
