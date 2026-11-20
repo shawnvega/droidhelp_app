@@ -8,13 +8,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.ClosedSendChannelException
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
@@ -53,11 +51,15 @@ class WebSocketTransport(
         val json: Json = Json,
         val maxFrameSize: Int = DEFAULT_MAX_FRAME_SIZE,
         val maxQueueSize: Int = DEFAULT_MAX_QUEUE_SIZE,
-        val client: OkHttpClient? = null
+        val client: OkHttpClient? = null,
+        val outboundOverflowPolicy: OutboundMessageQueue.OverflowPolicy =
+            OutboundMessageQueue.OverflowPolicy.SUSPEND,
+        val maxBufferedBytes: Long = DEFAULT_MAX_BUFFERED_BYTES
     ) {
         init {
             require(maxFrameSize > 0) { "maxFrameSize must be positive" }
             require(maxQueueSize > 0) { "maxQueueSize must be positive" }
+            require(maxBufferedBytes > 0) { "maxBufferedBytes must be positive" }
         }
     }
 
@@ -101,7 +103,10 @@ class WebSocketTransport(
     private val parsedFrameQueue = ParsedFrameQueue(config.maxQueueSize)
 
     // Bounded outbound message queue
-    private val outboundQueue: Channel<FencedMessage> = Channel(config.maxQueueSize)
+    private val outboundQueue = OutboundMessageQueue<FencedMessage>(
+        maxSize = config.maxQueueSize,
+        overflowPolicy = config.outboundOverflowPolicy
+    )
     private var queueJob: Job? = null
 
     // Correlator stub for request/response correlation
@@ -115,10 +120,6 @@ class WebSocketTransport(
     private val staleMessagesDropped = AtomicInteger(0)
     private val oversizedFramesDropped = AtomicInteger(0)
     private val malformedFramesDropped = AtomicInteger(0)
-
-    init {
-        ensureQueueProcessorRunning()
-    }
 
     /**
      * Connects to the WebSocket endpoint (`/api/ws`).
@@ -149,7 +150,6 @@ class WebSocketTransport(
             attemptId == JOIN_IN_FLIGHT -> deferred?.await() ?: false
             deferred == null -> false
             else -> {
-                ensureQueueProcessorRunning()
                 val channel = Channel<Any>(config.maxQueueSize)
                 synchronized(connectionLock) {
                     activeIncomingChannel = channel
@@ -289,6 +289,7 @@ class WebSocketTransport(
             receiveJob = scope.launch {
                 receiveMessages(webSocket.receiveChannel(channel))
             }
+            ensureQueueProcessorRunning()
             dispatchIncomingMessage(Message.Ready)
             deferred.complete(true)
         }
@@ -312,6 +313,7 @@ class WebSocketTransport(
                     _connectionState.value = ConnectionState.CLOSING
                 }
             }
+            cancelQueueProcessor()
             webSocket.close(NORMAL_CLOSURE_CODE, reason)
             channel.close()
             deferred.complete(false)
@@ -333,6 +335,7 @@ class WebSocketTransport(
                     pendingConnection = null
                 }
             }
+            cancelQueueProcessor()
             channel.close()
             deferred.complete(false)
             if (!manuallyDisconnected.get() && !closed.get()) {
@@ -357,6 +360,7 @@ class WebSocketTransport(
                 }
                 connectionError = t as? Exception ?: Exception(t)
             }
+            cancelQueueProcessor()
             channel.close()
             deferred.complete(false)
             if (!manuallyDisconnected.get() && !closed.get()) {
@@ -394,11 +398,10 @@ class WebSocketTransport(
         connectionJob?.cancel()
         receiveJob?.cancel()
         reconnectJob?.cancel()
-        queueJob?.cancel()
+        cancelQueueProcessor()
         connectionJob = null
         receiveJob = null
         reconnectJob = null
-        queueJob = null
         channelToClose?.close()
         if (wasConnected) {
             wsToClose?.close(NORMAL_CLOSURE_CODE, "Normal closure")
@@ -430,7 +433,8 @@ class WebSocketTransport(
     }
 
     /**
-     * Enqueues a message onto the bounded outbound queue paired with the current [SocketOwner].
+     * Enqueues a message onto the bounded outbound queue paired with the current [SocketOwner],
+     * respecting [WebSocketConfig.outboundOverflowPolicy] backpressure / drop settings.
      * @param message The message to send
      */
     override fun send(message: Message) {
@@ -438,19 +442,53 @@ class WebSocketTransport(
         val socketOwner = checkNotNull(owners.getSocketOwner()) {
             "No SocketOwner available. Call connect() or resumeSession() first."
         }
-        ensureQueueProcessorRunning()
         val fenced = FencedMessage(message, socketOwner)
-        val enqueueResult = outboundQueue.trySend(fenced)
-        if (enqueueResult.isFailure && !enqueueResult.isClosed) {
+        val enqueued = outboundQueue.enqueueOutgoing(fenced)
+        if (!enqueued &&
+            !closed.get() &&
+            config.outboundOverflowPolicy == OutboundMessageQueue.OverflowPolicy.SUSPEND
+        ) {
             scope.launch {
-                try {
-                    outboundQueue.send(fenced)
-                } catch (_: ClosedSendChannelException) {
-                    // Transport closed while waiting for outbound queue capacity
-                }
+                outboundQueue.enqueueOutgoingSuspending(fenced)
             }
         }
+        if (_connectionState.value == ConnectionState.CONNECTED) {
+            ensureQueueProcessorRunning()
+        }
     }
+
+    /**
+     * Non-blocking enqueue of an outgoing [message] paired with the current [SocketOwner]
+     * onto the bounded outbound queue, applying [policy] when full.
+     *
+     * @return `true` if the message was enqueued, or `false` if rejected/dropped or closed.
+     */
+    fun enqueueOutgoing(
+        message: Message,
+        policy: OutboundMessageQueue.OverflowPolicy = config.outboundOverflowPolicy
+    ): Boolean {
+        check(!closed.get()) { "WebSocketTransport is closed." }
+        val socketOwner = checkNotNull(owners.getSocketOwner()) {
+            "No SocketOwner available. Call connect() or resumeSession() first."
+        }
+        val enqueued = outboundQueue.enqueueOutgoing(FencedMessage(message, socketOwner), policy)
+        if (enqueued && _connectionState.value == ConnectionState.CONNECTED) {
+            ensureQueueProcessorRunning()
+        }
+        return enqueued
+    }
+
+    /**
+     * Non-blocking FIFO dequeue of the next pending outgoing [Message] from the outbound queue,
+     * relieving backpressure for waiting producers, or `null` if the queue is empty.
+     */
+    fun dequeueOutgoing(): Message? = outboundQueue.dequeueOutgoing()?.message
+
+    /** Returns the number of outgoing messages currently waiting in the outbound queue. */
+    fun getOutboundQueueSize(): Int = outboundQueue.size()
+
+    /** Returns the number of outgoing messages dropped due to outbound queue overflow policies. */
+    fun getDroppedOutboundMessages(): Int = outboundQueue.droppedCount()
 
     /**
      * Registers a callback for incoming messages.
@@ -501,7 +539,10 @@ class WebSocketTransport(
 
     private fun ensureQueueProcessorRunning() {
         synchronized(connectionLock) {
-            if (!closed.get() && queueJob?.isActive != true) {
+            if (!closed.get() &&
+                _connectionState.value == ConnectionState.CONNECTED &&
+                queueJob?.isActive != true
+            ) {
                 queueJob = scope.launch {
                     processOutboundQueue()
                 }
@@ -509,21 +550,53 @@ class WebSocketTransport(
         }
     }
 
+    private fun cancelQueueProcessor() {
+        val jobToCancel = synchronized(connectionLock) {
+            queueJob.also { queueJob = null }
+        }
+        jobToCancel?.cancel()
+    }
+
+    private fun isSocketBackpressured(): Boolean {
+        val ws = webSocket ?: return false
+        return !closed.get() && isTransportConnected() && ws.queueSize() >= config.maxBufferedBytes
+    }
+
+    private suspend fun awaitSocketBackpressureRelief() {
+        while (isSocketBackpressured()) {
+            delay(BACKPRESSURE_POLL_MS)
+        }
+    }
+
     /**
-     * Processes the bounded outbound message queue while enforcing [SocketOwner] fencing.
+     * Processes the bounded outbound message queue while enforcing [SocketOwner] fencing
+     * and socket write-buffer backpressure.
      */
     private suspend fun processOutboundQueue() {
-        for (fenced in outboundQueue) {
-            try {
-                owners.validateSocketOwner(fenced.capturedSocketOwner)
-                if (_connectionState.value != ConnectionState.CONNECTED) {
-                    _connectionState.first { it == ConnectionState.CONNECTED }
-                }
-                owners.validateSocketOwner(fenced.capturedSocketOwner)
-                actualSend(fenced.message)
-            } catch (_: StaleOwnerException) {
-                staleMessagesDropped.incrementAndGet()
+        var keepRunning = true
+        while (keepRunning && !closed.get() && isTransportConnected()) {
+            awaitSocketBackpressureRelief()
+            val fenced = if (!closed.get() && isTransportConnected()) {
+                outboundQueue.dequeueOutgoingSuspending()
+            } else {
+                null
             }
+            if (fenced == null) {
+                keepRunning = false
+            } else {
+                sendFencedMessage(fenced)
+            }
+        }
+    }
+
+    private fun sendFencedMessage(fenced: FencedMessage) {
+        try {
+            owners.validateSocketOwner(fenced.capturedSocketOwner)
+            if (isTransportConnected()) {
+                actualSend(fenced.message)
+            }
+        } catch (_: StaleOwnerException) {
+            staleMessagesDropped.incrementAndGet()
         }
     }
 
@@ -782,11 +855,13 @@ class WebSocketTransport(
         private const val ALREADY_CONNECTED = -1L
         private const val JOIN_IN_FLIGHT = -2L
         private const val CLOSED_TRANSPORT = -3L
+        private const val BACKPRESSURE_POLL_MS = 10L
         private val NEWLINE_BYTES = ByteString.of('\n'.code.toByte())
         const val WS_PATH = "/api/ws"
         const val NORMAL_CLOSURE_CODE = 1000
         const val DEFAULT_MAX_FRAME_SIZE = 1024 * 1024 // 1MB
         const val DEFAULT_MAX_QUEUE_SIZE = 1000
+        const val DEFAULT_MAX_BUFFERED_BYTES = 1024L * 1024L // 1MB
         const val DEFAULT_CONNECT_TIMEOUT_SECONDS = 30L
         const val DEFAULT_READ_TIMEOUT_SECONDS = 0L
         const val DEFAULT_WRITE_TIMEOUT_SECONDS = 30L
