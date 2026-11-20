@@ -111,6 +111,15 @@ class BoundsTest {
             assertDoesNotThrow { checkUtf8ByteLimit("😀".repeat(256)) }
             // 341 * 3 bytes = 1023 bytes (one byte below default limit)
             assertDoesNotThrow { checkUtf8ByteLimit("中".repeat(341)) }
+            // 341 * 3 + 1 = 1024 bytes (exact default limit)
+            assertDoesNotThrow { checkUtf8ByteLimit("中".repeat(341) + "a") }
+
+            // 513 * 2 bytes = 1026 bytes (> 1024), even though length is 513 chars
+            val twoByteOver = assertThrows(IllegalArgumentException::class.java) {
+                checkUtf8ByteLimit("é".repeat(513))
+            }
+            assertTrue(twoByteOver.message.orEmpty().contains("1026"))
+            assertTrue(twoByteOver.message.orEmpty().contains("1024"))
 
             val emojiOver = assertThrows(IllegalArgumentException::class.java) {
                 checkUtf8ByteLimit("😀".repeat(256) + "a")
@@ -124,6 +133,20 @@ class BoundsTest {
             }
             assertTrue(cjkOver.message.orEmpty().contains("1026"))
             assertTrue(cjkOver.message.orEmpty().contains("1024"))
+        }
+
+        @Test
+        fun `allows custom maxBytes above default limit and rejects one byte over`() {
+            val customLimit = DEFAULT_MAX_UTF8_BYTES * 2
+            assertDoesNotThrow { checkUtf8ByteLimit("a".repeat(customLimit), maxBytes = customLimit) }
+            assertDoesNotThrow { checkUtf8ByteLimit("😀".repeat(customLimit / 4), maxBytes = customLimit) }
+
+            val overLimit = assertThrows(IllegalArgumentException::class.java) {
+                checkUtf8ByteLimit("a".repeat(customLimit + 1), maxBytes = customLimit)
+            }
+            val message = overLimit.message.orEmpty()
+            assertTrue(message.contains((customLimit + 1).toString()))
+            assertTrue(message.contains(customLimit.toString()))
         }
 
         @Test
@@ -292,6 +315,13 @@ class BoundsTest {
             assertThrows(IllegalArgumentException::class.java) {
                 checkIntBounds(-5_000_000_001L, min = -5_000_000_000L, max = 0L)
             }
+
+            assertThrows(IllegalArgumentException::class.java) {
+                checkIntBounds(Long.MIN_VALUE, min = Long.MIN_VALUE + 1L, max = Long.MAX_VALUE)
+            }
+            assertThrows(IllegalArgumentException::class.java) {
+                checkIntBounds(Long.MAX_VALUE, min = Long.MIN_VALUE, max = Long.MAX_VALUE - 1L)
+            }
         }
 
         @Test
@@ -344,6 +374,8 @@ class BoundsTest {
             assertEquals("CaseSensitive-ID", ensureIdNotNormalized("CaseSensitive-ID"))
             assertEquals("UPPERCASE_ID", ensureIdNotNormalized("UPPERCASE_ID"))
             assertEquals("lowercase_id", ensureIdNotNormalized("lowercase_id"))
+            assertEquals("Straße", ensureIdNotNormalized("Straße"))
+            assertEquals("İstanbul", ensureIdNotNormalized("İstanbul"))
             assertNotEquals(
                 ensureIdNotNormalized("Session-ABC"),
                 ensureIdNotNormalized("session-abc"),
@@ -353,6 +385,7 @@ class BoundsTest {
         @Test
         fun `preserves leading trailing and internal whitespace without trimming`() {
             assertEquals("  padded-id  ", ensureIdNotNormalized("  padded-id  "))
+            assertEquals(" x ", ensureIdNotNormalized(" x "))
             assertEquals("\tleading-tab", ensureIdNotNormalized("\tleading-tab"))
             assertEquals("trailing-newline\n", ensureIdNotNormalized("trailing-newline\n"))
             assertEquals("  mixed  spaces  ", ensureIdNotNormalized("  mixed  spaces  "))
@@ -388,6 +421,9 @@ class BoundsTest {
             }
             assertThrows(IllegalArgumentException::class.java) {
                 ensureIdNotNormalized("\t\r\n")
+            }
+            assertThrows(IllegalArgumentException::class.java) {
+                ensureIdNotNormalized("\u2000\u3000")
             }
         }
     }
