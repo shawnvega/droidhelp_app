@@ -38,6 +38,17 @@ class Auth(private val secureStorage: SecureStorage) {
         /** Upper bound on retained digests so the registry cannot grow forever. */
         private const val MAX_CONSUMED_TOKENS = 64
 
+        /** PKCE code challenge method per RFC 7636 Section 4.3. */
+        const val CODE_CHALLENGE_METHOD_S256 = "S256"
+
+        /** Minimum PKCE code_verifier length per RFC 7636 Section 4.1. */
+        const val MIN_VERIFIER_LENGTH = 43
+
+        /** Maximum PKCE code_verifier length per RFC 7636 Section 4.1. */
+        const val MAX_VERIFIER_LENGTH = 128
+
+        private val CODE_VERIFIER_REGEX = Regex("^[A-Za-z0-9._~-]{$MIN_VERIFIER_LENGTH,$MAX_VERIFIER_LENGTH}$")
+
         /** 32 random bytes encode to 43 base64url characters (256 bits of entropy, RFC 7636). */
         private const val VERIFIER_BYTE_LENGTH = 32
 
@@ -47,6 +58,12 @@ class Auth(private val secureStorage: SecureStorage) {
         private const val NIBBLE_SHIFT = 4
         private const val NIBBLE_MASK = 0x0F
         private const val HEX_CHARS = "0123456789abcdef"
+
+        /**
+         * Returns true if [verifier] satisfies RFC 7636 Section 4.1
+         * (43..128 ASCII unreserved characters: ALPHA / DIGIT / "-" / "." / "_" / "~").
+         */
+        fun isValidCodeVerifier(verifier: String): Boolean = CODE_VERIFIER_REGEX.matches(verifier)
     }
 
     /**
@@ -56,7 +73,7 @@ class Auth(private val secureStorage: SecureStorage) {
      */
     suspend fun getOrCreateVerifier(): String = mutex.withLock {
         val existing = secureStorage.getString(VERIFIER_KEY)
-        if (existing != null) return@withLock existing
+        if (existing != null && isValidCodeVerifier(existing)) return@withLock existing
 
         val newVerifier = generateCodeVerifier()
         secureStorage.saveString(VERIFIER_KEY, newVerifier)
@@ -76,15 +93,21 @@ class Auth(private val secureStorage: SecureStorage) {
     }
 
     /**
-     * Derives a [code_challenge] from the provided [verifier] using SHA-256.
+     * Derives a [code_challenge] from the provided [verifier] using SHA-256 (S256).
      * 
      * @param verifier The [code_verifier] string.
      * @return The derived [code_challenge] string.
      */
     fun generateCodeChallenge(verifier: String): String {
         require(verifier.isNotBlank()) { "Code verifier must not be blank" }
+        require(verifier.length in MIN_VERIFIER_LENGTH..MAX_VERIFIER_LENGTH) {
+            "Code verifier length must be between $MIN_VERIFIER_LENGTH and $MAX_VERIFIER_LENGTH characters"
+        }
+        require(isValidCodeVerifier(verifier)) {
+            "Code verifier contains invalid RFC 7636 unreserved characters"
+        }
         val digest = MessageDigest.getInstance("SHA-256")
-        val hash = digest.digest(verifier.toByteArray(Charsets.UTF_8))
+        val hash = digest.digest(verifier.toByteArray(Charsets.US_ASCII))
         return Base64.getUrlEncoder().withoutPadding().encodeToString(hash)
     }
 
@@ -122,12 +145,19 @@ class Auth(private val secureStorage: SecureStorage) {
     suspend fun validateAndClearState(receivedState: String): Boolean = mutex.withLock {
         if (receivedState.isBlank()) return@withLock false
         val storedState = secureStorage.getString(STATE_KEY)
-        if (storedState != null && constantTimeEquals(storedState, receivedState)) {
+        if (!storedState.isNullOrBlank() && constantTimeEquals(storedState, receivedState)) {
             secureStorage.delete(STATE_KEY)
             true
         } else {
             false
         }
+    }
+
+    /**
+     * Removes any stored CSRF [state] token from [secureStorage].
+     */
+    suspend fun clearState() = mutex.withLock {
+        secureStorage.delete(STATE_KEY)
     }
 
     /**

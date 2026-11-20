@@ -279,5 +279,107 @@ class AuthTest {
         assertEquals(1, results.count { it.exceptionOrNull() is Auth.TokenReuseException })
         assertTrue(auth.isRefreshTokenConsumed("refresh_1"))
     }
+
+    @Test
+    fun testGenerateCodeVerifierUniquenessAndRfc7636Format() {
+        val auth = Auth(FakeSecureStorage())
+        val generated = (1..32).map { auth.generateCodeVerifier() }.toSet()
+
+        assertEquals(32, generated.size)
+        for (verifier in generated) {
+            assertEquals(Auth.MIN_VERIFIER_LENGTH, verifier.length)
+            assertTrue(Auth.isValidCodeVerifier(verifier))
+        }
+        assertEquals("S256", Auth.CODE_CHALLENGE_METHOD_S256)
+    }
+
+    @Test
+    fun testGenerateCodeChallengeEnforcesRfc7636VerifierConstraints() {
+        val auth = Auth(FakeSecureStorage())
+
+        // Boundary lengths and RFC 7636 unreserved characters (- . _ ~)
+        val minLengthVerifier = "a".repeat(Auth.MIN_VERIFIER_LENGTH)
+        val maxLengthVerifier = "Az09-._~".repeat(16) // 128 chars
+        assertEquals(Auth.MAX_VERIFIER_LENGTH, maxLengthVerifier.length)
+        assertTrue(auth.generateCodeChallenge(minLengthVerifier).isNotEmpty())
+        assertTrue(auth.generateCodeChallenge(maxLengthVerifier).isNotEmpty())
+
+        // Too short (< 43) and too long (> 128)
+        assertThrows(IllegalArgumentException::class.java) {
+            auth.generateCodeChallenge("a".repeat(Auth.MIN_VERIFIER_LENGTH - 1))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            auth.generateCodeChallenge("a".repeat(Auth.MAX_VERIFIER_LENGTH + 1))
+        }
+
+        // Disallowed characters (+, /, =, whitespace, non-ASCII)
+        val invalidChars = listOf('+', '/', '=', ' ', 'é')
+        for (invalidChar in invalidChars) {
+            val badVerifier = "a".repeat(Auth.MIN_VERIFIER_LENGTH - 1) + invalidChar
+            assertFalse(Auth.isValidCodeVerifier(badVerifier))
+            assertThrows(IllegalArgumentException::class.java) {
+                auth.generateCodeChallenge(badVerifier)
+            }
+        }
+    }
+
+    @Test
+    fun testGetOrCreateVerifierRegeneratesInvalidStoredValue() = runTest {
+        val storage = FakeSecureStorage()
+        storage.saveString("pkce_code_verifier", "too_short")
+        val auth = Auth(storage)
+
+        val verifier = auth.getOrCreateVerifier()
+
+        assertTrue(Auth.isValidCodeVerifier(verifier))
+        assertEquals(verifier, storage.getString("pkce_code_verifier"))
+    }
+
+    @Test
+    fun testGenerateAndSaveStateEntropyUniquenessAndClearState() = runTest {
+        val storage = FakeSecureStorage()
+        val auth = Auth(storage)
+
+        val states = (1..16).map { auth.generateAndSaveState() }.toSet()
+        assertEquals(16, states.size)
+        for (state in states) {
+            assertTrue(state.length >= 22)
+            assertFalse(state.contains("+"))
+            assertFalse(state.contains("/"))
+            assertFalse(state.contains("="))
+        }
+
+        val activeState = auth.generateAndSaveState()
+        auth.clearState()
+        assertNull(storage.getString("oauth_state"))
+        assertFalse(auth.validateAndClearState(activeState))
+    }
+
+    @Test
+    fun testValidateAndClearStateConcurrentRaceOnlyAllowsOne() = runTest {
+        val baseStorage = FakeSecureStorage()
+        val yieldingStorage = object : SecureStorage by baseStorage {
+            override suspend fun getString(key: String): String? {
+                yield()
+                return baseStorage.getString(key)
+            }
+
+            override suspend fun delete(key: String) {
+                yield()
+                baseStorage.delete(key)
+            }
+        }
+        val auth = Auth(yieldingStorage)
+        val state = auth.generateAndSaveState()
+
+        val results = listOf(
+            async { auth.validateAndClearState(state) },
+            async { auth.validateAndClearState(state) }
+        ).awaitAll()
+
+        assertEquals(1, results.count { it })
+        assertEquals(1, results.count { !it })
+        assertNull(baseStorage.getString("oauth_state"))
+    }
 }
 

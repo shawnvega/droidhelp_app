@@ -1,6 +1,8 @@
 package com.bighelp.droidhelp.platform
 
+import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -9,6 +11,7 @@ import java.net.URI
 class BrowserAuthenticationTest {
     companion object {
         private const val TEST_PORT = 8080
+        private const val DEFAULT_HTTP_PORT = 80
         private const val OTHER_PORT = 9090
         private const val OUT_OF_RANGE_PORT = 65536
         private const val TEST_PATH = "/auth/callback"
@@ -264,6 +267,220 @@ class BrowserAuthenticationTest {
         assertThrows(BrowserAuthenticationException::class.java) {
             callback.validate(incomingUrl, mapOf("state" to "test-stat", "code" to "test-code"))
         }
+    }
+
+    @Test
+    fun testRejectsFragmentsInConstructorAndIncomingUrl() {
+        val url = URI("http://localhost:$TEST_PORT$TEST_PATH")
+        val callback = BrowserAuthenticationCallback(TEST_PORT, TEST_PATH, TEST_STATE, url)
+
+        assertThrows(BrowserAuthenticationException::class.java) {
+            BrowserAuthenticationCallback(
+                TEST_PORT,
+                TEST_PATH,
+                TEST_STATE,
+                URI("http://localhost:$TEST_PORT$TEST_PATH#fragment")
+            )
+        }
+        assertThrows(BrowserAuthenticationException::class.java) {
+            BrowserAuthenticationCallback(
+                TEST_PORT,
+                TEST_PATH,
+                TEST_STATE,
+                URI("http://localhost:$TEST_PORT$TEST_PATH#")
+            )
+        }
+        assertThrows(BrowserAuthenticationException::class.java) {
+            callback.validate(
+                URI("http://localhost:$TEST_PORT$TEST_PATH?state=$TEST_STATE&code=test-code#fragment")
+            )
+        }
+        assertThrows(BrowserAuthenticationException::class.java) {
+            callback.validate(
+                URI("http://localhost:$TEST_PORT$TEST_PATH#"),
+                mapOf("state" to TEST_STATE, "code" to "test-code")
+            )
+        }
+    }
+
+    @Test
+    fun testRejectsOpaqueUrisEmptyPortAndOmittedPortMismatch() {
+        val url = URI("http://localhost:$TEST_PORT$TEST_PATH")
+        val callback = BrowserAuthenticationCallback(TEST_PORT, TEST_PATH, TEST_STATE, url)
+        val queryParams = mapOf("state" to TEST_STATE, "code" to "test-code")
+
+        assertThrows(BrowserAuthenticationException::class.java) {
+            BrowserAuthenticationCallback(
+                TEST_PORT,
+                TEST_PATH,
+                TEST_STATE,
+                URI("http:localhost:$TEST_PORT$TEST_PATH")
+            )
+        }
+        assertThrows(BrowserAuthenticationException::class.java) {
+            callback.validate(URI("http:localhost:$TEST_PORT$TEST_PATH"), queryParams)
+        }
+        assertThrows(BrowserAuthenticationException::class.java) {
+            BrowserAuthenticationCallback(
+                TEST_PORT,
+                TEST_PATH,
+                TEST_STATE,
+                URI("http://localhost:$TEST_PATH")
+            )
+        }
+        assertThrows(BrowserAuthenticationException::class.java) {
+            callback.validate(URI("http://localhost:$TEST_PATH"), queryParams)
+        }
+        assertThrows(BrowserAuthenticationException::class.java) {
+            callback.validate(URI("http://localhost$TEST_PATH"), queryParams)
+        }
+    }
+
+    @Test
+    fun testDefaultHttpPort80Handling() {
+        val url = URI("http://localhost:$DEFAULT_HTTP_PORT$TEST_PATH")
+        val callback = BrowserAuthenticationCallback(DEFAULT_HTTP_PORT, TEST_PATH, TEST_STATE, url)
+
+        val omittedPortIncoming = URI(
+            "http://localhost$TEST_PATH?state=$TEST_STATE&code=port80-code"
+        )
+        assertEquals("port80-code", callback.validate(omittedPortIncoming))
+
+        val explicitPortIncoming = URI(
+            "http://localhost:$DEFAULT_HTTP_PORT$TEST_PATH?state=$TEST_STATE&code=port80-explicit"
+        )
+        assertEquals("port80-explicit", callback.validate(explicitPortIncoming))
+
+        assertThrows(BrowserAuthenticationException::class.java) {
+            callback.validate(
+                URI("http://localhost:$TEST_PORT$TEST_PATH?state=$TEST_STATE&code=wrong-port")
+            )
+        }
+        assertThrows(BrowserAuthenticationException::class.java) {
+            callback.validate(
+                URI("http://localhost:$TEST_PATH?state=$TEST_STATE&code=empty-port")
+            )
+        }
+    }
+
+    @Test
+    fun testCaseInsensitiveSchemeAndHostNormalization() {
+        val url = URI("http://localhost:$TEST_PORT$TEST_PATH")
+        val callback = BrowserAuthenticationCallback(TEST_PORT, TEST_PATH, TEST_STATE, url)
+
+        val upperIncoming = URI(
+            "HTTP://LOCALHOST:$TEST_PORT$TEST_PATH?state=$TEST_STATE&code=upper-code"
+        )
+        assertEquals("upper-code", callback.validate(upperIncoming))
+
+        val upperConfig = BrowserAuthenticationCallback(
+            TEST_PORT,
+            TEST_PATH,
+            TEST_STATE,
+            URI("HTTP://LOCALHOST:$TEST_PORT$TEST_PATH")
+        )
+        assertEquals(
+            "lower-code",
+            upperConfig.validate(
+                URI("http://localhost:$TEST_PORT$TEST_PATH?state=$TEST_STATE&code=lower-code")
+            )
+        )
+
+        // Still rejects non-http schemes and non-loopback lookalike hosts
+        assertThrows(BrowserAuthenticationException::class.java) {
+            callback.validate(
+                URI("HTTPS://localhost:$TEST_PORT$TEST_PATH?state=$TEST_STATE&code=test-code")
+            )
+        }
+        for (nonLoopback in listOf("localhost.evil.com", "127.0.0.2", "localhost.", "0.0.0.0")) {
+            assertThrows(BrowserAuthenticationException::class.java) {
+                BrowserAuthenticationCallback(
+                    TEST_PORT,
+                    TEST_PATH,
+                    TEST_STATE,
+                    URI("http://$nonLoopback:$TEST_PORT$TEST_PATH")
+                )
+            }
+        }
+    }
+
+    @Test
+    fun testConstructorRejectsAdditionalInvalidPaths() {
+        val validUrl = URI("http://localhost:$TEST_PORT$TEST_PATH")
+        val invalidPaths = listOf(
+            "/auth/./callback",
+            "/.",
+            "/auth\\callback",
+            "/auth/callback?x=1",
+            "/auth/callback#frag",
+            "/auth/%2e%2e/callback",
+            "/auth/callback ",
+            "/auth\n/callback"
+        )
+        for (badPath in invalidPaths) {
+            assertThrows(BrowserAuthenticationException::class.java) {
+                BrowserAuthenticationCallback(TEST_PORT, badPath, TEST_STATE, validUrl)
+            }
+        }
+    }
+
+    @Test
+    fun testMalformedQueryEncodingEncodedDuplicateKeysAndBareError() {
+        val url = URI("http://localhost:$TEST_PORT$TEST_PATH")
+        val callback = BrowserAuthenticationCallback(TEST_PORT, TEST_PATH, TEST_STATE, url)
+
+        assertThrows(BrowserAuthenticationException::class.java) {
+            callback.validate("http://localhost:$TEST_PORT$TEST_PATH?state=$TEST_STATE&code=%ZZ")
+        }
+        assertThrows(BrowserAuthenticationException::class.java) {
+            callback.validate("http://localhost:$TEST_PORT$TEST_PATH?state=$TEST_STATE&code=%2")
+        }
+        assertThrows(BrowserAuthenticationException::class.java) {
+            callback.validate(
+                URI("http://localhost:$TEST_PORT$TEST_PATH?state=$TEST_STATE&%73tate=other&code=test-code")
+            )
+        }
+        assertThrows(BrowserAuthenticationException::class.java) {
+            callback.validate(URI("http://localhost:$TEST_PORT$TEST_PATH?state=$TEST_STATE&code"))
+        }
+
+        val bareError = assertThrows(BrowserAuthenticationException::class.java) {
+            callback.validate(
+                URI("http://localhost:$TEST_PORT$TEST_PATH?state=$TEST_STATE&error=server_error&code=ignored")
+            )
+        }
+        assertTrue(bareError.message?.contains("server_error") == true)
+
+        assertEquals(
+            "a b+c/d",
+            callback.validate("http://localhost:$TEST_PORT$TEST_PATH?state=$TEST_STATE&code=a%20b%2Bc%2Fd")
+        )
+    }
+
+    @Test
+    fun testEndToEndPkceStateAndLoopbackValidation() = runTest {
+        val auth = Auth(FakeSecureStorage())
+        val verifier = auth.getOrCreateVerifier()
+        val challenge = auth.generateCodeChallenge(verifier)
+        val state = auth.generateAndSaveState()
+
+        assertTrue(Auth.isValidCodeVerifier(verifier))
+        assertTrue(challenge.isNotBlank())
+
+        val redirectUri = URI("http://127.0.0.1:$TEST_PORT$TEST_PATH")
+        val callback = BrowserAuthenticationCallback(TEST_PORT, TEST_PATH, state, redirectUri)
+
+        val incomingCallback = URI(
+            "http://127.0.0.1:$TEST_PORT$TEST_PATH?state=$state&code=auth_code_xyz"
+        )
+        val authorizationCode = callback.validate(incomingCallback)
+
+        assertEquals("auth_code_xyz", authorizationCode)
+        assertTrue(auth.validateAndClearState(state))
+        assertFalse(auth.validateAndClearState(state))
+
+        auth.clearVerifier()
+        assertFalse(auth.getOrCreateVerifier() == verifier)
     }
 }
 

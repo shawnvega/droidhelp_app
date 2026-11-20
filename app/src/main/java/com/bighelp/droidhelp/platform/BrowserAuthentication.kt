@@ -1,9 +1,11 @@
 package com.bighelp.droidhelp.platform
 
 import java.net.URI
+import java.net.URISyntaxException
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import java.util.Locale
 
 class BrowserAuthenticationException(
     message: String,
@@ -19,11 +21,15 @@ class BrowserAuthenticationCallback(
     private val state: String,
     val url: URI
 ) {
+    private val expectedHost: String
+
     companion object {
         private const val MIN_PORT = 1
         private const val MAX_PORT = 65535
+        private const val DEFAULT_HTTP_PORT = 80
         private const val ALLOWED_SCHEME = "http"
         private val LOOPBACK_HOSTS = setOf("localhost", "127.0.0.1", "[::1]")
+        private val DISALLOWED_PATH_CHARS = setOf('\\', '?', '#', '%')
     }
 
     init {
@@ -32,17 +38,33 @@ class BrowserAuthenticationCallback(
         }
         checkValid(path.startsWith("/")) { "Path must start with /" }
         checkValid(!path.contains("//")) { "Path must not contain //" }
-        checkValid(!path.contains("..") && !path.contains("\\")) {
+        checkValid(!path.contains("..") && path.split('/').none { it == "." || it == ".." }) {
             "Path must not contain traversal sequences"
         }
+        checkValid(path.none { it in DISALLOWED_PATH_CHARS || it.isWhitespace() || it.isISOControl() }) {
+            "Path contains disallowed characters"
+        }
         checkValid(state.isNotBlank()) { "State must not be empty" }
-        checkValid(url.scheme == ALLOWED_SCHEME) { "Scheme must be http" }
-        checkValid(url.userInfo == null) { "Redirect URI must not contain user info" }
+        validateBaseUri(url)
 
-        val host = url.host ?: throw BrowserAuthenticationException("Host is missing")
+        val host = url.host?.lowercase(Locale.ROOT)
+            ?: throw BrowserAuthenticationException("Host is missing")
         checkValid(host in LOOPBACK_HOSTS) {
             "Redirect URI must be a loopback address (localhost, 127.0.0.1, or [::1])"
         }
+        expectedHost = host
+    }
+
+    /**
+     * Parses and validates a raw redirect URI string [incomingUrl].
+     */
+    fun validate(incomingUrl: String): String {
+        val parsedUri = try {
+            URI(incomingUrl)
+        } catch (e: URISyntaxException) {
+            throw BrowserAuthenticationException("Malformed redirect URI: ${e.message}", e)
+        }
+        return validate(parsedUri)
     }
 
     /**
@@ -59,16 +81,19 @@ class BrowserAuthenticationCallback(
      * returning the authorization code on success.
      */
     fun validate(incomingUrl: URI, queryParameters: Map<String, String>): String {
-        checkValid(incomingUrl.scheme == ALLOWED_SCHEME) { "Scheme must be http" }
-        checkValid(incomingUrl.userInfo == null) { "Redirect URI must not contain user info" }
-        checkValid(incomingUrl.host == url.host) {
-            "Host mismatch: expected ${url.host}, got ${incomingUrl.host}"
+        validateBaseUri(incomingUrl)
+
+        val incomingHost = incomingUrl.host?.lowercase(Locale.ROOT)
+        checkValid(incomingHost == expectedHost) {
+            "Host mismatch: expected $expectedHost, got ${incomingUrl.host}"
         }
         checkValid(incomingUrl.rawPath == path && incomingUrl.path == path) {
             "Path mismatch: expected $path, got ${incomingUrl.path}"
         }
-        checkValid(incomingUrl.port == port) {
-            "Port mismatch: expected $port, got ${incomingUrl.port}"
+
+        val incomingPort = if (incomingUrl.port == -1) DEFAULT_HTTP_PORT else incomingUrl.port
+        checkValid(incomingPort == port) {
+            "Port mismatch: expected $port, got $incomingPort"
         }
         checkValid(constantTimeEquals(state, queryParameters["state"])) { "State mismatch" }
 
@@ -81,6 +106,20 @@ class BrowserAuthenticationCallback(
 
         return queryParameters["code"]?.takeIf { it.isNotBlank() }
             ?: throw BrowserAuthenticationException("Missing code parameter")
+    }
+
+    private fun validateBaseUri(uri: URI) {
+        checkValid(!uri.isOpaque) { "Redirect URI must be hierarchical" }
+        checkValid(uri.scheme?.equals(ALLOWED_SCHEME, ignoreCase = true) == true) {
+            "Scheme must be http"
+        }
+        checkValid(uri.rawUserInfo == null && uri.userInfo == null) {
+            "Redirect URI must not contain user info"
+        }
+        checkValid(uri.rawFragment == null) { "Redirect URI must not contain a fragment" }
+        checkValid(uri.rawAuthority?.endsWith(":") != true) {
+            "Redirect URI must not contain an empty port"
+        }
     }
 
     private fun parseQueryParameters(rawQuery: String?): Map<String, String> {
