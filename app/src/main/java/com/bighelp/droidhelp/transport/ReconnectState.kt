@@ -191,8 +191,7 @@ class ReconnectState {
             val preservesHandlers = shouldRecover || automaticRecoveryActive
 
             socketGeneration += 1L
-            owners?.incrementSocketEpoch()
-            val nextSocketOwner = owners?.getSocketOwner()
+            val nextSocketOwner = owners?.incrementSocketEpoch()
 
             val needsResume = _session != null
             if (needsResume) {

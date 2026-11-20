@@ -186,11 +186,12 @@ class WebSocketTransport(
             attemptId == JOIN_IN_FLIGHT -> deferred?.await() ?: false
             deferred == null -> false
             else -> {
+                val capturedOwner = owners.getOwner()
                 val channel = Channel<Any>(config.maxQueueSize)
                 synchronized(connectionLock) {
                     activeIncomingChannel = channel
                 }
-                executeConnectionAttempt(attemptId, channel, deferred)
+                executeConnectionAttempt(attemptId, channel, deferred, capturedOwner)
             }
         }
     }
@@ -198,11 +199,12 @@ class WebSocketTransport(
     private suspend fun executeConnectionAttempt(
         attemptId: Long,
         channel: Channel<Any>,
-        deferred: CompletableDeferred<Boolean>
+        deferred: CompletableDeferred<Boolean>,
+        capturedOwner: Owner?
     ): Boolean {
         val initiated = try {
             val request = buildWebSocketRequest()
-            val listener = createWebSocketListener(attemptId, channel, deferred)
+            val listener = createWebSocketListener(attemptId, channel, deferred, capturedOwner)
             val createdSocket = httpClient.newWebSocket(request, listener)
             synchronized(connectionLock) {
                 if (connectionSequence.get() == attemptId && !closed.get()) {
@@ -295,10 +297,11 @@ class WebSocketTransport(
     private fun createWebSocketListener(
         attemptId: Long,
         channel: Channel<Any>,
-        deferred: CompletableDeferred<Boolean>
+        deferred: CompletableDeferred<Boolean>,
+        capturedOwner: Owner?
     ): WebSocketListener = object : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
-            handleSocketOpen(attemptId, webSocket, channel, deferred)
+            handleSocketOpen(attemptId, webSocket, channel, deferred, capturedOwner)
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
@@ -343,28 +346,37 @@ class WebSocketTransport(
         attemptId: Long,
         socket: WebSocket,
         channel: Channel<Any>,
-        deferred: CompletableDeferred<Boolean>
+        deferred: CompletableDeferred<Boolean>,
+        capturedOwner: Owner?
     ) {
         val previousReceiveJob: Job?
         val accepted = synchronized(connectionLock) {
-            val valid = connectionSequence.get() == attemptId &&
-                !manuallyDisconnected.get() &&
-                !closed.get()
-            if (valid) {
+            val valid = connectionSequence.get() == attemptId && !manuallyDisconnected.get() && !closed.get()
+            val epochAdvanced = valid && try {
+                if (capturedOwner != null) owners.incrementSocketEpoch(capturedOwner) else owners.incrementSocketEpoch()
+                true
+            } catch (_: StaleOwnerException) {
+                false
+            }
+            if (epochAdvanced) {
                 this.webSocket = socket
-                // Increment socket epoch BEFORE marking connected so queued stale messages are fenced
-                owners.incrementSocketEpoch()
                 isConnecting = false
                 pendingConnection = null
                 connectionAttempts = 0
                 previousReceiveJob = receiveJob
                 _connectionState.value = ConnectionState.CONNECTED
                 correlator.start()
-                receiveJob = scope.launch {
-                    incomingIntake.consumeLoop(socket.receiveChannel(channel))
-                }
+                receiveJob = scope.launch { incomingIntake.consumeLoop(socket.receiveChannel(channel)) }
                 true
             } else {
+                if (valid) {
+                    connectionSequence.incrementAndGet()
+                    isConnecting = false
+                    if (pendingConnection === deferred) pendingConnection = null
+                    if (this.webSocket === socket) this.webSocket = null
+                    if (activeIncomingChannel === channel) activeIncomingChannel = null
+                    _connectionState.value = ConnectionState.DISCONNECTED
+                }
                 previousReceiveJob = null
                 false
             }
@@ -376,9 +388,7 @@ class WebSocketTransport(
         } else {
             previousReceiveJob?.cancel()
             outboundPipeline.ensureProcessorRunning()
-            if (connectionSequence.get() == attemptId && !closed.get()) {
-                dispatchIncomingMessage(Message.Ready)
-            }
+            if (connectionSequence.get() == attemptId && !closed.get()) dispatchIncomingMessage(Message.Ready)
             deferred.complete(true)
         }
     }
