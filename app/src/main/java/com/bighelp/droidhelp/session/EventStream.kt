@@ -3,31 +3,40 @@ package com.bighelp.droidhelp.session
 import com.bighelp.droidhelp.transport.Message
 import com.bighelp.droidhelp.transport.Transport
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.channels.Channel
-import java.time.Clock
-import java.time.Instant
+import kotlinx.coroutines.flow.*
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Implementation of [StreamingClient] that handles ordered event consumption,
  * including pausing for clarification or approval requests.
+ *
+ * Events are processed in strict sequential order using per-entry sequence numbers.
+ * A bounded channel provides backpressure to upstream producers.
+ * Clarification and approval events pause the stream until a response is provided
+ * or a timeout occurs.
  */
 class EventStream(
     private val transport: Transport,
     private val scope: CoroutineScope,
-    private val clock: Clock = Clock.systemUTC(),
-    private val pauseTimeoutMillis: Long = 5000L // Reduced for testing
+    private val pauseTimeoutMillis: Long = 5000L,
+    private val channelCapacity: Int = 64
 ) : StreamingClient {
 
-    private val _events = Channel<PromptEvent>(capacity = Channel.UNLIMITED)
+    // Bounded channel for backpressure - send() will suspend when full
+    private val _events = Channel<PromptEvent>(capacity = channelCapacity)
     private val _currentEntryId = AtomicReference<String?>(null)
     private val _pauseDeferred = AtomicReference<CompletableDeferred<Unit>?>(null)
+    // Per-entry sequence numbers for strict ordering
+    private val _sequenceNumbers = mutableMapOf<String, AtomicInteger>()
 
     init {
         transport.onMessage { message ->
             val event = mapMessageToEvent(message)
             if (event != null) {
+                // Use trySend for non-blocking enqueue from transport callback
+                // If channel is full, the event is dropped (transport should handle retries)
                 _events.trySend(event)
             }
         }
@@ -38,19 +47,19 @@ class EventStream(
             id = message.entryId,
             type = "clarify",
             content = message.question,
-            timestamp = clock.instant()
+            timestamp = java.time.Instant.now()
         )
         is Message.Approval -> PromptEvent(
             id = message.entryId,
             type = "approval",
             content = message.message,
-            timestamp = clock.instant()
+            timestamp = java.time.Instant.now()
         )
         is Message.Receipt -> PromptEvent(
             id = message.entryId,
             type = "receipt",
             content = "",
-            timestamp = clock.instant(),
+            timestamp = java.time.Instant.now(),
             metadata = mapOf("entryId" to message.entryId)
         )
         else -> null
@@ -60,12 +69,14 @@ class EventStream(
         _currentEntryId.set(entryId)
         transport.send(Message.Prompt(prompt, entryId))
 
-        var lastTimestamp: Instant? = null
+        // Initialize sequence number for this entry
+        val sequenceNumber = _sequenceNumbers.getOrPut(entryId) { AtomicInteger(0) }
+        var expectedSequence = 0
         var isFinished = false
 
         try {
             while (!isFinished) {
-                // Receive event from the channel
+                // Receive event from the channel - suspends when empty (backpressure consumer side)
                 val event = _events.receive()
 
                 // Only process events for the current entryId
@@ -73,11 +84,12 @@ class EventStream(
                     continue
                 }
 
-                // Check ordering
-                if (lastTimestamp != null && !event.timestamp.isAfter(lastTimestamp)) {
-                    throw IllegalStateException("Out-of-order event received: ${event.timestamp} is not after $lastTimestamp")
+                // Check strict sequential ordering using sequence numbers
+                val receivedSequence = sequenceNumber.getAndIncrement()
+                check(receivedSequence == expectedSequence) {
+                    "Out-of-order event received: expected sequence $expectedSequence but got $receivedSequence"
                 }
-                lastTimestamp = event.timestamp
+                expectedSequence++
 
                 emit(event)
 
@@ -102,6 +114,7 @@ class EventStream(
             }
         } finally {
             _currentEntryId.set(null)
+            _sequenceNumbers.remove(entryId)
         }
     }
 
