@@ -1,0 +1,88 @@
+package com.bighelp.droidhelp.transport
+
+import kotlinx.coroutines.test.runTest
+import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertThrows
+import org.junit.jupiter.api.Assertions.assertTrue
+import java.io.IOException
+import kotlinx.coroutines.runBlocking
+
+class CancellationClientTest {
+    private lateinit var server: MockWebServer
+    private lateinit var client: CancellationClient
+    private lateinit var endpoint: Endpoint
+
+    @BeforeEach
+    fun setUp() {
+        server = MockWebServer()
+        server.start()
+        // Use a dummy endpoint for testing
+        endpoint = Endpoint.build(
+            scheme = "http",
+            host = "localhost",
+            port = server.port,
+            path = "/"
+        )
+        client = CancellationClient(OkHttpClient(), endpoint)
+    }
+
+    @AfterEach
+    fun tearDown() {
+        server.shutdown()
+    }
+
+    @Test
+    fun `cancel sends correct request`() = runTest {
+        server.enqueue(MockResponse().setResponseCode(200))
+
+        val requestId = "test-request-id"
+        client.cancel(requestId)
+
+        val recordedRequest = server.takeRequest()
+        assertEquals("/api/cancel", recordedRequest.path)
+        assertEquals("POST", recordedRequest.method)
+        val body = recordedRequest.body?.readUtf8() ?: ""
+        println("DEBUG: body = $body")
+        // Check that both fields are present and have non-empty values
+        assertTrue(body.contains("\"requestId\":\"$requestId\""), "Missing requestId")
+        assertTrue(body.contains("\"cancellationId\":\""), "Missing cancellationId key or opening quote")
+        // Check that cancellationId is not empty by looking for the closing quote after the opening one
+        // A simple way is to check that it contains a non-empty string between quotes
+        // But since we don't want to parse, let's just check that it doesn't end with :"\""
+        assertTrue(!body.contains("\"cancellationId\":\"\""), "cancellationId should not be empty")
+    }
+
+    @Test
+    fun `cancel throws exception on non-2xx response`() = runTest {
+        server.enqueue(MockResponse().setResponseCode(500))
+
+        val requestId = "test-request-id"
+        assertThrows(IOException::class.java) {
+            runBlocking { client.cancel(requestId) }
+        }
+    }
+
+    @Test
+    fun `cancel handles different endpoint paths correctly`() = runTest {
+        val customEndpoint = Endpoint.build(
+            scheme = "http",
+            host = "localhost",
+            port = server.port,
+            path = "/v1"
+        )
+        val customClient = CancellationClient(OkHttpClient(), customEndpoint)
+        server.enqueue(MockResponse().setResponseCode(200))
+
+        customClient.cancel("req-1")
+
+        val recordedRequest = server.takeRequest()
+        // Expected path: /v1/api/cancel
+        assertEquals("/v1/api/cancel", recordedRequest.path)
+    }
+}

@@ -24,4 +24,6 @@ sealed class Message {
     data class Approval(val message: String, val entryId: String) : Message()
     @Serializable
     data class Receipt(val entryId: String) : Message()
+    @Serializable
+    data class Cancellation(val requestId: String, val cancellationId: String) : Message()
 }
