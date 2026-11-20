@@ -21,3 +21,26 @@ fun checkUtf8ByteLimit(input: String, maxBytes: Int = DEFAULT_MAX_UTF8_BYTES) {
         "Input exceeds UTF-8 byte limit: $byteSize bytes > $maxBytes bytes"
     }
 }
+
+/**
+ * Validates that [value] lies within the inclusive integer bounds `[min, max]`.
+ *
+ * Uses [Long] parameters so values outside the 32-bit [Int] range can be validated.
+ *
+ * @param value The integer value to validate.
+ * @param min The inclusive lower bound (defaults to [Int.MIN_VALUE]).
+ * @param max The inclusive upper bound (defaults to [Int.MAX_VALUE]).
+ * @throws IllegalArgumentException if `min > max` or if `value < min || value > max`.
+ */
+fun checkIntBounds(
+    value: Long,
+    min: Long = Int.MIN_VALUE.toLong(),
+    max: Long = Int.MAX_VALUE.toLong(),
+) {
+    require(min <= max) {
+        "Invalid integer bounds: min ($min) must be <= max ($max)"
+    }
+    require(value >= min && value <= max) {
+        "Value $value is out of integer bounds [$min, $max]"
+    }
+}
