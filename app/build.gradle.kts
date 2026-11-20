@@ -88,6 +88,7 @@ dependencies {
     testImplementation("androidx.test:core:1.5.0")
     testImplementation("org.junit.jupiter:junit-jupiter-api:5.9.3")
     testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.9.3")
+    testRuntimeOnly("org.junit.vintage:junit-vintage-engine:5.9.3")
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")

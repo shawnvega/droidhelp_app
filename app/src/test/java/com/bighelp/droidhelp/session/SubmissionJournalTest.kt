@@ -40,18 +40,20 @@ class SubmissionJournalTest {
     }
 
     @Test
-    fun `test invalid state transitions`() = runBlocking {
-        val entry = journal.prepare("test-intent")
+    fun `test invalid state transitions`() {
+        runBlocking {
+            val entry = journal.prepare("test-intent")
 
-        // Cannot acknowledge directly from PREPARED
-        assertThrows(IllegalStateTransitionException::class.java) {
-            runBlocking { journal.acknowledge(entry.id) }
-        }
+            // Cannot acknowledge directly from PREPARED
+            assertThrows(IllegalStateTransitionException::class.java) {
+                runBlocking { journal.acknowledge(entry.id) }
+            }
 
-        // Cannot dispatch twice
-        journal.dispatch(entry.id)
-        assertThrows(IllegalStateTransitionException::class.java) {
-            runBlocking { journal.dispatch(entry.id) }
+            // Cannot dispatch twice
+            journal.dispatch(entry.id)
+            assertThrows(IllegalStateTransitionException::class.java) {
+                runBlocking { journal.dispatch(entry.id) }
+            }
         }
     }
 
