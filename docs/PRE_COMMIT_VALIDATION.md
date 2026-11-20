@@ -75,4 +75,12 @@ Both gates in the pre-commit hook were tested independently with temporary chang
   git add docs/PRE_COMMIT_VALIDATION.md
   git commit -m "docs: add pre-commit hook validation report"
   ```
-- **Status**: Verified by committing without `--no-verify` (results recorded in the follow-up update below).
+- **Observed outcome**: **Allowed (PASSED validation)**
+  - Exit code: `0`
+  - Step 1/2 (`./gradlew lintDebug`): Passed (`0 errors, 41 warnings`, `BUILD SUCCESSFUL`).
+  - Step 2/2 (`./gradlew test`): Passed (`BUILD SUCCESSFUL`).
+  - Hook message:
+    ```text
+    All pre-commit checks passed!
+    ```
+  - Commit created on `main`: `9bdc972` (`docs: add pre-commit hook validation report`).
