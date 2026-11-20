@@ -1,6 +1,10 @@
 package com.bighelp.droidhelp.transport
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -711,5 +715,39 @@ class OwnersTest {
 
         assertTrue(validCompletions.get() + staleCatches.get() == rotations * 6)
         assertEquals((rotations + 1).toLong(), owners.getSocketOwner()?.socketEpoch)
+    }
+
+    @Test
+    fun testWithSocketOwnerFencesAcrossCoroutineSuspension() = runTest {
+        val signIn = SignIn("https://example.com", "user1", 1L)
+        val owner = Owner(signIn, 1L)
+        owners.updateSignIn(signIn)
+        owners.updateOwner(owner)
+        val epoch1 = owners.incrementSocketEpoch(owner)
+
+        val enteredBlock = CompletableDeferred<Unit>()
+        val allowCompletion = CompletableDeferred<Unit>()
+
+        supervisorScope {
+            val fencedOp = async {
+                owners.withSocketOwner(epoch1) { active ->
+                    enteredBlock.complete(Unit)
+                    allowCompletion.await()
+                    "completed:${active.socketEpoch}"
+                }
+            }
+
+            enteredBlock.await()
+            assertEquals(2L, owners.incrementSocketEpoch(owner).socketEpoch)
+            allowCompletion.complete(Unit)
+
+            var caughtStale = false
+            try {
+                fencedOp.await()
+            } catch (_: StaleOwnerException) {
+                caughtStale = true
+            }
+            assertTrue(caughtStale, "Expected StaleOwnerException when SocketOwner rotated while suspended")
+        }
     }
 }
