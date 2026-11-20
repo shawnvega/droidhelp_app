@@ -8,12 +8,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ClosedSendChannelException
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -38,16 +40,20 @@ class WebSocketTransport(
     private val config: WebSocketConfig = WebSocketConfig()
 ) : Transport {
 
+    enum class ConnectionState {
+        DISCONNECTED,
+        CONNECTING,
+        CONNECTED,
+        CLOSING,
+        CLOSED
+    }
+
     data class WebSocketConfig(
         val headers: Map<String, String> = emptyMap(),
         val json: Json = Json,
         val maxFrameSize: Int = DEFAULT_MAX_FRAME_SIZE,
         val maxQueueSize: Int = DEFAULT_MAX_QUEUE_SIZE,
-        val client: OkHttpClient = OkHttpClient.Builder()
-            .connectTimeout(DEFAULT_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .readTimeout(DEFAULT_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .writeTimeout(DEFAULT_WRITE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .build()
+        val client: OkHttpClient? = null
     ) {
         init {
             require(maxFrameSize > 0) { "maxFrameSize must be positive" }
@@ -58,10 +64,18 @@ class WebSocketTransport(
     /** Represents a message paired with its captured socket owner for fencing. */
     private data class FencedMessage(val message: Message, val capturedSocketOwner: SocketOwner)
 
+    private val ownsHttpClient = config.client == null
+    private val httpClient: OkHttpClient = config.client ?: OkHttpClient.Builder()
+        .connectTimeout(DEFAULT_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .readTimeout(DEFAULT_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .writeTimeout(DEFAULT_WRITE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .build()
+
     private val owners = Owners()
     private val connectionLock = Any()
     private val connectionSequence = AtomicLong(0L)
     private val manuallyDisconnected = AtomicBoolean(false)
+    private val closed = AtomicBoolean(false)
 
     // WebSocket connection state
     @Volatile
@@ -73,7 +87,8 @@ class WebSocketTransport(
     private var pendingConnection: CompletableDeferred<Boolean>? = null
     @Volatile
     private var isConnecting = false
-    private val connectedState = MutableStateFlow(false)
+    private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
+    val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
     @Volatile
     private var connectionError: Exception? = null
     private var connectionAttempts = 0
@@ -107,12 +122,14 @@ class WebSocketTransport(
     override suspend fun connect(): Boolean {
         val (deferred, attemptId) = synchronized(connectionLock) {
             when {
-                connectedState.value -> null to ALREADY_CONNECTED
+                closed.get() -> null to CLOSED_TRANSPORT
+                _connectionState.value == ConnectionState.CONNECTED -> null to ALREADY_CONNECTED
                 isConnecting -> pendingConnection to JOIN_IN_FLIGHT
                 else -> {
                     manuallyDisconnected.set(false)
                     isConnecting = true
                     connectionError = null
+                    _connectionState.value = ConnectionState.CONNECTING
                     val newDeferred = CompletableDeferred<Boolean>()
                     pendingConnection = newDeferred
                     newDeferred to connectionSequence.incrementAndGet()
@@ -121,6 +138,7 @@ class WebSocketTransport(
         }
 
         return when {
+            attemptId == CLOSED_TRANSPORT -> false
             attemptId == ALREADY_CONNECTED -> true
             attemptId == JOIN_IN_FLIGHT -> deferred?.await() ?: false
             deferred == null -> false
@@ -143,9 +161,9 @@ class WebSocketTransport(
         val initiated = try {
             val request = buildWebSocketRequest()
             val listener = createWebSocketListener(attemptId, channel, deferred)
-            val createdSocket = config.client.newWebSocket(request, listener)
+            val createdSocket = httpClient.newWebSocket(request, listener)
             synchronized(connectionLock) {
-                if (connectionSequence.get() == attemptId) {
+                if (connectionSequence.get() == attemptId && !closed.get()) {
                     webSocket = createdSocket
                 } else {
                     createdSocket.cancel()
@@ -183,6 +201,9 @@ class WebSocketTransport(
                 if (connectionSequence.get() == attemptId) {
                     isConnecting = false
                     pendingConnection = null
+                    if (!closed.get()) {
+                        _connectionState.value = ConnectionState.DISCONNECTED
+                    }
                     wsToCancel = webSocket
                     webSocket = null
                 } else {
@@ -206,7 +227,9 @@ class WebSocketTransport(
             if (connectionSequence.get() == attemptId) {
                 connectionError = error
                 isConnecting = false
-                connectedState.value = false
+                if (!closed.get()) {
+                    _connectionState.value = ConnectionState.DISCONNECTED
+                }
                 pendingConnection = null
             }
         }
@@ -215,7 +238,9 @@ class WebSocketTransport(
     }
 
     internal fun buildWebSocketUrl(): String {
-        val base = endpoint.canonical.trimEnd('/')
+        val wsScheme = if (endpoint.scheme == "https") "wss" else "ws"
+        val wsCanonical = endpoint.canonical.replaceFirst("${endpoint.scheme}://", "$wsScheme://")
+        val base = wsCanonical.trimEnd('/')
         return if (base.endsWith(WS_PATH)) base else "$base$WS_PATH"
     }
 
@@ -236,12 +261,13 @@ class WebSocketTransport(
         deferred: CompletableDeferred<Boolean>
     ): WebSocketListener = object : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
-            if (connectionSequence.get() != attemptId || manuallyDisconnected.get()) {
+            if (connectionSequence.get() != attemptId || manuallyDisconnected.get() || closed.get()) {
                 webSocket.close(NORMAL_CLOSURE_CODE, "Stale connection")
                 channel.close()
                 deferred.complete(false)
                 return
             }
+            val previousReceiveJob: Job?
             synchronized(connectionLock) {
                 this@WebSocketTransport.webSocket = webSocket
                 // Increment socket epoch BEFORE marking connected so queued stale messages are fenced
@@ -249,8 +275,10 @@ class WebSocketTransport(
                 isConnecting = false
                 pendingConnection = null
                 connectionAttempts = 0
-                connectedState.value = true
+                previousReceiveJob = receiveJob
+                _connectionState.value = ConnectionState.CONNECTED
             }
+            previousReceiveJob?.cancel()
             correlator.start()
             receiveJob = scope.launch {
                 receiveMessages(webSocket.receiveChannel(channel))
@@ -274,19 +302,26 @@ class WebSocketTransport(
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
             if (connectionSequence.get() != attemptId) return
             synchronized(connectionLock) {
-                connectedState.value = false
+                if (!closed.get()) {
+                    _connectionState.value = ConnectionState.CLOSING
+                }
             }
+            webSocket.close(NORMAL_CLOSURE_CODE, reason)
             channel.close()
             deferred.complete(false)
-            if (!manuallyDisconnected.get()) {
-                scheduleReconnect()
-            }
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
             if (connectionSequence.get() != attemptId) return
             synchronized(connectionLock) {
-                connectedState.value = false
+                if (this@WebSocketTransport.webSocket === webSocket) {
+                    this@WebSocketTransport.webSocket = null
+                }
+                _connectionState.value = if (closed.get()) {
+                    ConnectionState.CLOSED
+                } else {
+                    ConnectionState.DISCONNECTED
+                }
                 isConnecting = false
                 if (pendingConnection === deferred) {
                     pendingConnection = null
@@ -294,7 +329,7 @@ class WebSocketTransport(
             }
             channel.close()
             deferred.complete(false)
-            if (!manuallyDisconnected.get()) {
+            if (!manuallyDisconnected.get() && !closed.get()) {
                 scheduleReconnect()
             }
         }
@@ -302,7 +337,14 @@ class WebSocketTransport(
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
             if (connectionSequence.get() != attemptId) return
             synchronized(connectionLock) {
-                connectedState.value = false
+                if (this@WebSocketTransport.webSocket === webSocket) {
+                    this@WebSocketTransport.webSocket = null
+                }
+                _connectionState.value = if (closed.get()) {
+                    ConnectionState.CLOSED
+                } else {
+                    ConnectionState.DISCONNECTED
+                }
                 isConnecting = false
                 if (pendingConnection === deferred) {
                     pendingConnection = null
@@ -311,14 +353,14 @@ class WebSocketTransport(
             }
             channel.close()
             deferred.complete(false)
-            if (!manuallyDisconnected.get()) {
+            if (!manuallyDisconnected.get() && !closed.get()) {
                 scheduleReconnect()
             }
         }
     }
 
     /**
-     * Disconnects from the WebSocket.
+     * Disconnects from the WebSocket while keeping the transport reusable for future [connect] calls.
      */
     fun disconnect() {
         val wasConnected: Boolean
@@ -328,8 +370,12 @@ class WebSocketTransport(
         synchronized(connectionLock) {
             manuallyDisconnected.set(true)
             connectionSequence.incrementAndGet()
-            wasConnected = connectedState.value
-            connectedState.value = false
+            wasConnected = _connectionState.value == ConnectionState.CONNECTED
+            _connectionState.value = if (closed.get()) {
+                ConnectionState.CLOSED
+            } else {
+                ConnectionState.DISCONNECTED
+            }
             isConnecting = false
             wsToClose = webSocket
             webSocket = null
@@ -357,10 +403,30 @@ class WebSocketTransport(
     }
 
     /**
+     * Permanently closes this transport and releases all underlying resources
+     * (active socket, coroutines, outbound queue, correlator executor, and owned OkHttpClient).
+     */
+    fun close() {
+        if (!closed.compareAndSet(false, true)) return
+        disconnect()
+        synchronized(connectionLock) {
+            _connectionState.value = ConnectionState.CLOSED
+        }
+        outboundQueue.close()
+        messageListeners.clear()
+        correlator.shutdown()
+        if (ownsHttpClient) {
+            httpClient.dispatcher.executorService.shutdown()
+            httpClient.connectionPool.evictAll()
+        }
+    }
+
+    /**
      * Enqueues a message onto the bounded outbound queue paired with the current [SocketOwner].
      * @param message The message to send
      */
     override fun send(message: Message) {
+        check(!closed.get()) { "WebSocketTransport is closed." }
         val socketOwner = checkNotNull(owners.getSocketOwner()) {
             "No SocketOwner available. Call connect() or resumeSession() first."
         }
@@ -369,7 +435,11 @@ class WebSocketTransport(
         val enqueueResult = outboundQueue.trySend(fenced)
         if (enqueueResult.isFailure && !enqueueResult.isClosed) {
             scope.launch {
-                outboundQueue.send(fenced)
+                try {
+                    outboundQueue.send(fenced)
+                } catch (_: ClosedSendChannelException) {
+                    // Transport closed while waiting for outbound queue capacity
+                }
             }
         }
     }
@@ -379,7 +449,9 @@ class WebSocketTransport(
      * @param callback The callback to invoke for each message
      */
     override fun onMessage(callback: (Message) -> Unit) {
-        messageListeners.add(callback)
+        if (!closed.get()) {
+            messageListeners.add(callback)
+        }
     }
 
     private fun dispatchIncomingMessage(message: Message) {
@@ -390,7 +462,7 @@ class WebSocketTransport(
 
     private fun ensureQueueProcessorRunning() {
         synchronized(connectionLock) {
-            if (queueJob?.isActive != true) {
+            if (!closed.get() && queueJob?.isActive != true) {
                 queueJob = scope.launch {
                     processOutboundQueue()
                 }
@@ -405,8 +477,8 @@ class WebSocketTransport(
         for (fenced in outboundQueue) {
             try {
                 owners.validateSocketOwner(fenced.capturedSocketOwner)
-                if (!connectedState.value) {
-                    connectedState.first { it }
+                if (_connectionState.value != ConnectionState.CONNECTED) {
+                    _connectionState.first { it == ConnectionState.CONNECTED }
                 }
                 owners.validateSocketOwner(fenced.capturedSocketOwner)
                 actualSend(fenced.message)
@@ -417,35 +489,31 @@ class WebSocketTransport(
     }
 
     /**
-     * Performs the actual network send.
+     * Performs the actual network send using newline-framed JSON encoding.
      */
     private fun actualSend(message: Message) {
         val ws = webSocket ?: return
         val jsonString = config.json.encodeToString(Message.serializer(), message)
-        if (ws.send(jsonString)) {
+        if (ws.send("$jsonString\n")) {
             messagesSent.incrementAndGet()
         }
     }
 
     /**
-     * Handles incoming text messages (JSON frames) with bounded frame decode.
-     * @param text The JSON text
+     * Handles incoming text messages (newline-framed JSON payloads) with bounded buffer decode.
+     * @param text The incoming text payload
+     * @param frameDecoder The per-connection bounded newline JSON decoder
      */
-    private fun handleIncomingText(text: String) {
-        if (text.toByteArray(Charsets.UTF_8).size > config.maxFrameSize) {
-            oversizedFramesDropped.incrementAndGet()
-            return
+    private fun handleIncomingText(text: String, frameDecoder: NewlineJsonFrameDecoder) {
+        val result = frameDecoder.decode(text)
+        if (result.oversizedDrops > 0) {
+            oversizedFramesDropped.addAndGet(result.oversizedDrops)
         }
-        try {
-            val message = config.json.decodeFromString(Message.serializer(), text)
+        result.messages.forEach { message ->
             messagesReceived.incrementAndGet()
             dispatchIncomingMessage(message)
             // Submit message to correlator's ordered reader/writer loop
             correlator.submit(message)
-        } catch (_: SerializationException) {
-            // Drop malformed JSON frames without terminating the receive loop
-        } catch (_: IllegalArgumentException) {
-            // Drop invalid payloads without terminating the receive loop
         }
     }
 
@@ -465,7 +533,7 @@ class WebSocketTransport(
      * Schedules a reconnection attempt.
      */
     private fun scheduleReconnect() {
-        if (manuallyDisconnected.get() || reconnectJob?.isActive == true) {
+        if (manuallyDisconnected.get() || closed.get() || reconnectJob?.isActive == true) {
             return
         }
 
@@ -474,7 +542,7 @@ class WebSocketTransport(
             delay(delayDuration.inWholeMilliseconds)
             connectionAttempts++
 
-            if (manuallyDisconnected.get() || !ReconnectPolicy.isQuiet(connectionAttempts)) {
+            if (manuallyDisconnected.get() || closed.get() || !ReconnectPolicy.isQuiet(connectionAttempts)) {
                 return@launch
             }
 
@@ -488,14 +556,19 @@ class WebSocketTransport(
     }
 
     /**
-     * Receives messages from the WebSocket.
+     * Receives messages from the WebSocket using a fresh bounded newline JSON decoder per connection.
      */
     private suspend fun receiveMessages(channel: ReceiveChannel<Any>) {
-        for (message in channel) {
-            when (message) {
-                is String -> handleIncomingText(message)
-                is ByteString -> handleIncomingBytes(message)
+        val frameDecoder = NewlineJsonFrameDecoder(config.json, config.maxFrameSize)
+        try {
+            for (message in channel) {
+                when (message) {
+                    is String -> handleIncomingText(message, frameDecoder)
+                    is ByteString -> handleIncomingBytes(message)
+                }
             }
+        } finally {
+            frameDecoder.reset()
         }
     }
 
@@ -504,6 +577,7 @@ class WebSocketTransport(
      * @param session The session to resume.
      */
     override fun resumeSession(session: Session) {
+        if (closed.get()) return
         ReconnectPolicy.setSession(session)
         SecureInput.bind(session.profile)
         connectionJob = scope.launch { connect() }
@@ -577,7 +651,14 @@ class WebSocketTransport(
      * @return true if connected, false otherwise
      */
     fun isTransportConnected(): Boolean {
-        return connectedState.value
+        return _connectionState.value == ConnectionState.CONNECTED
+    }
+
+    /**
+     * Returns whether this transport has been permanently closed.
+     */
+    fun isClosed(): Boolean {
+        return closed.get()
     }
 
     /**
@@ -604,6 +685,7 @@ class WebSocketTransport(
     companion object {
         private const val ALREADY_CONNECTED = -1L
         private const val JOIN_IN_FLIGHT = -2L
+        private const val CLOSED_TRANSPORT = -3L
         const val WS_PATH = "/api/ws"
         const val NORMAL_CLOSURE_CODE = 1000
         const val DEFAULT_MAX_FRAME_SIZE = 1024 * 1024 // 1MB

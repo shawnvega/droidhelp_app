@@ -6,6 +6,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
@@ -68,16 +69,26 @@ class WebSocketTransportTest {
         val transport = WebSocketTransport(this, endpoint)
         try {
             assertFalse(transport.isTransportConnected())
-            assertEquals("http://localhost:$DEFAULT_TEST_PORT/api/ws", transport.buildWebSocketUrl())
+            assertEquals(WebSocketTransport.ConnectionState.DISCONNECTED, transport.connectionState.value)
+            assertEquals("ws://localhost:$DEFAULT_TEST_PORT/api/ws", transport.buildWebSocketUrl())
+
             val alreadyWsEndpoint = Endpoint.build(host = "localhost", port = DEFAULT_TEST_PORT, path = "/api/ws")
             val alreadyWsTransport = WebSocketTransport(this, alreadyWsEndpoint)
             try {
-                assertEquals("http://localhost:$DEFAULT_TEST_PORT/api/ws", alreadyWsTransport.buildWebSocketUrl())
+                assertEquals("ws://localhost:$DEFAULT_TEST_PORT/api/ws", alreadyWsTransport.buildWebSocketUrl())
             } finally {
-                alreadyWsTransport.disconnect()
+                alreadyWsTransport.close()
+            }
+
+            val tlsEndpoint = Endpoint.build(scheme = "https", host = "secure.example.com")
+            val tlsTransport = WebSocketTransport(this, tlsEndpoint)
+            try {
+                assertEquals("wss://secure.example.com:443/api/ws", tlsTransport.buildWebSocketUrl())
+            } finally {
+                tlsTransport.close()
             }
         } finally {
-            transport.disconnect()
+            transport.close()
         }
     }
 
@@ -90,7 +101,7 @@ class WebSocketTransportTest {
             transport.resumeSession(session)
             assertEquals(session, ReconnectPolicy.getSession())
         } finally {
-            transport.disconnect()
+            transport.close()
         }
     }
 
@@ -146,7 +157,7 @@ class WebSocketTransportTest {
             assertEquals(1, server.requestCount)
             withTimeout(TEST_TIMEOUT_MS) { serverOpened.await() }.close(NORMAL_CLOSE_CODE, "done")
         } finally {
-            transport.disconnect()
+            transport.close()
         }
     }
 
@@ -167,7 +178,7 @@ class WebSocketTransportTest {
             assertFalse(transport.isTransportConnected())
             assertNotNull(transport.getConnectionError())
         } finally {
-            transport.disconnect()
+            transport.close()
         }
     }
 
@@ -180,7 +191,7 @@ class WebSocketTransportTest {
                 transport.send(Message.Ping)
             }
         } finally {
-            transport.disconnect()
+            transport.close()
         }
     }
 
@@ -234,6 +245,8 @@ class WebSocketTransportTest {
 
             withTimeout(TEST_TIMEOUT_MS) { twoFramesReceived.await() }
             assertEquals(2, transport.getMessagesSent())
+            assertTrue(serverReceived[0].endsWith("\n"))
+            assertTrue(serverReceived[1].endsWith("\n"))
             assertEquals(prompt, Json.decodeFromString(Message.serializer(), serverReceived[0]))
             assertEquals(Message.Ping, Json.decodeFromString(Message.serializer(), serverReceived[1]))
 
@@ -245,7 +258,7 @@ class WebSocketTransportTest {
             assertEquals(1, transport.getMessagesReceived())
             assertTrue(clientReceived.contains(Message.Pong))
         } finally {
-            transport.disconnect()
+            transport.close()
         }
     }
 
@@ -296,7 +309,7 @@ class WebSocketTransportTest {
             assertEquals(1, transport.getMessagesSent())
             assertEquals(1, transport.getStaleMessagesDropped())
         } finally {
-            transport.disconnect()
+            transport.close()
         }
     }
 
@@ -355,7 +368,7 @@ class WebSocketTransportTest {
             assertEquals(2, transport.getOversizedFramesDropped())
             assertFalse(allMessages.any { it is Message.Prompt })
         } finally {
-            transport.disconnect()
+            transport.close()
         }
     }
 
@@ -396,7 +409,7 @@ class WebSocketTransportTest {
             assertEquals(receipt, withTimeout(TEST_TIMEOUT_MS) { correlatedReceipt.await() })
             assertEquals(0, transport.pendingCount())
         } finally {
-            transport.disconnect()
+            transport.close()
         }
     }
 
@@ -443,8 +456,114 @@ class WebSocketTransportTest {
                 serverReceived.filterIsInstance<Message.Prompt>().map { it.entryId }.toSet()
             )
         } finally {
-            transport.disconnect()
+            transport.close()
         }
+    }
+
+    @Test
+    fun testNewlineFramedAndSplitJsonPayloadsWithBoundedBuffer() = runBlocking {
+        val serverSocketDeferred = CompletableDeferred<WebSocket>()
+        server.enqueue(
+            MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    serverSockets.add(webSocket)
+                    serverSocketDeferred.complete(webSocket)
+                }
+            })
+        )
+
+        val endpoint = Endpoint.build(host = server.hostName, port = server.port)
+        val transport = WebSocketTransport(
+            scope = ioScope,
+            endpoint = endpoint,
+            config = WebSocketTransport.WebSocketConfig(maxFrameSize = NDJSON_TEST_MAX_BUFFER, client = client)
+        )
+        val received = CopyOnWriteArrayList<Message>()
+        val splitPromptReceived = CompletableDeferred<Message.Prompt>()
+        transport.onMessage { msg ->
+            received.add(msg)
+            if (msg is Message.Prompt && msg.entryId == "split-entry") {
+                splitPromptReceived.complete(msg)
+            }
+        }
+
+        try {
+            assertTrue(withTimeout(TEST_TIMEOUT_MS) { transport.connect() })
+            val serverWs = withTimeout(TEST_TIMEOUT_MS) { serverSocketDeferred.await() }
+
+            val pingJson = Json.encodeToString(Message.serializer(), Message.Ping)
+            val pongJson = Json.encodeToString(Message.serializer(), Message.Pong)
+            serverWs.send("$pingJson\n$pongJson\n")
+
+            val splitPrompt = Message.Prompt(text = "chunked payload", entryId = "split-entry")
+            val splitJson = Json.encodeToString(Message.serializer(), splitPrompt)
+            val half = splitJson.length / 2
+            serverWs.send(splitJson.substring(0, half))
+            serverWs.send(splitJson.substring(half) + "\n")
+
+            assertEquals(splitPrompt, withTimeout(TEST_TIMEOUT_MS) { splitPromptReceived.await() })
+            assertEquals(EXPECTED_NDJSON_COUNT, transport.getMessagesReceived())
+            assertTrue(received.contains(Message.Ping))
+            assertTrue(received.contains(Message.Pong))
+            assertEquals(0, transport.getOversizedFramesDropped())
+        } finally {
+            transport.close()
+        }
+    }
+
+    @Test
+    fun testConnectionLifecycleAndCloseReleasesResources() = runBlocking {
+        val firstServerWs = CompletableDeferred<WebSocket>()
+        server.enqueue(
+            MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    serverSockets.add(webSocket)
+                    firstServerWs.complete(webSocket)
+                }
+            })
+        )
+        server.enqueue(
+            MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    serverSockets.add(webSocket)
+                }
+            })
+        )
+
+        val endpoint = Endpoint.build(host = server.hostName, port = server.port)
+        val transport = WebSocketTransport(
+            scope = ioScope,
+            endpoint = endpoint,
+            config = WebSocketTransport.WebSocketConfig(client = client)
+        )
+        val owner = testOwner(endpoint.canonical)
+        transport.setSignIn(owner.signIn)
+        transport.setOwner(owner)
+
+        assertEquals(WebSocketTransport.ConnectionState.DISCONNECTED, transport.connectionState.value)
+        assertTrue(withTimeout(TEST_TIMEOUT_MS) { transport.connect() })
+        assertEquals(WebSocketTransport.ConnectionState.CONNECTED, transport.connectionState.value)
+
+        // Server-initiated close transitions lifecycle back to DISCONNECTED
+        withTimeout(TEST_TIMEOUT_MS) { firstServerWs.await() }.close(NORMAL_CLOSE_CODE, "server shutdown")
+        withTimeout(TEST_TIMEOUT_MS) {
+            transport.connectionState.first { it == WebSocketTransport.ConnectionState.DISCONNECTED }
+        }
+
+        // Disconnect + reconnect succeeds before permanent close
+        transport.disconnect()
+        assertTrue(withTimeout(TEST_TIMEOUT_MS) { transport.connect() })
+        assertEquals(WebSocketTransport.ConnectionState.CONNECTED, transport.connectionState.value)
+
+        // Permanent close releases resources and blocks subsequent connect/send while leaving caller client usable
+        transport.close()
+        assertTrue(transport.isClosed())
+        assertEquals(WebSocketTransport.ConnectionState.CLOSED, transport.connectionState.value)
+        assertFalse(withTimeout(TEST_TIMEOUT_MS) { transport.connect() })
+        assertThrows(IllegalStateException::class.java) {
+            transport.send(Message.Ping)
+        }
+        assertFalse(client.dispatcher.executorService.isShutdown)
     }
 
     private fun testOwner(canonicalEndpoint: String): Owner {
@@ -465,5 +584,7 @@ class WebSocketTransportTest {
         private const val SMALL_QUEUE_SIZE = 4
         private const val SMALL_MAX_FRAME_SIZE = 64
         private const val OVERSIZED_PAYLOAD_LEN = 128
+        private const val NDJSON_TEST_MAX_BUFFER = 256
+        private const val EXPECTED_NDJSON_COUNT = 3
     }
 }
