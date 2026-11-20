@@ -149,6 +149,157 @@ data class HistoryPage(
 )
 
 /**
+ * Type of change detected for a single history entry during reconciliation.
+ */
+enum class HistoryChangeKind {
+    INSERT,
+    UPDATE,
+    DELETE,
+}
+
+/**
+ * A single insert, update, or deletion detected when reconciling paged canonical history with
+ * streaming rows.
+ *
+ * - [HistoryChangeKind.INSERT]: [previous] and [previousIndex] are `null`; [current] and
+ *   [currentIndex] describe the newly merged entry.
+ * - [HistoryChangeKind.UPDATE]: [previous] and [current] describe the prior and reconciled entries
+ *   at [previousIndex] and [currentIndex]; [previousIdentity] is non-null when a provisional
+ *   streamed identity was promoted to a canonical identity.
+ * - [HistoryChangeKind.DELETE]: [previous] and [previousIndex] describe the removed entry;
+ *   [current] and [currentIndex] are `null`.
+ */
+data class HistoryReconciliationChange(
+    val kind: HistoryChangeKind,
+    val identity: HistoryEntryIdentity,
+    val previousIdentity: HistoryEntryIdentity? = null,
+    val previous: CanonicalHistoryEntry? = null,
+    val current: CanonicalHistoryEntry? = null,
+    val previousIndex: Int? = null,
+    val currentIndex: Int? = null,
+)
+
+/**
+ * Structured diff produced by history reconciliation, separating inserts, updates, and deletions.
+ */
+data class HistoryReconciliationDiff(
+    val changes: List<HistoryReconciliationChange> = emptyList(),
+) {
+    val inserts: List<HistoryReconciliationChange>
+        get() = changes.filter { it.kind == HistoryChangeKind.INSERT }
+
+    val updates: List<HistoryReconciliationChange>
+        get() = changes.filter { it.kind == HistoryChangeKind.UPDATE }
+
+    val deletes: List<HistoryReconciliationChange>
+        get() = changes.filter { it.kind == HistoryChangeKind.DELETE }
+
+    val isEmpty: Boolean
+        get() = changes.isEmpty()
+}
+
+/**
+ * Unified output of reconciling paged canonical history with streaming rows.
+ *
+ * - [entries]: Duplicate-free merged sequence in deterministic chronological/display order.
+ * - [diff]: Detected inserts, updates, and deletions relative to the pre-reconciliation baseline.
+ * - [identityAliases]: Provisional-to-canonical identity aliases active after reconciliation.
+ * - [ignoredDuplicates]: Number of duplicate incoming rows safely ignored without duplication.
+ * - [ignoredOutOfOrder]: Number of stale or out-of-order streaming rows safely ignored without
+ *   regressing newer or canonical state.
+ */
+data class HistoryReconciliationResult(
+    val entries: List<CanonicalHistoryEntry>,
+    val diff: HistoryReconciliationDiff,
+    val identityAliases: Map<HistoryEntryIdentity, HistoryEntryIdentity> = emptyMap(),
+    val ignoredDuplicates: Int = 0,
+    val ignoredOutOfOrder: Int = 0,
+)
+
+/**
+ * Operation represented by an incoming [StreamingHistoryRow].
+ */
+enum class StreamingRowOperation {
+    UPSERT,
+    DELETE,
+}
+
+/**
+ * Incoming streaming row event to reconcile against paged canonical history.
+ *
+ * - For [StreamingRowOperation.UPSERT], [entry] must be provided.
+ * - For [StreamingRowOperation.DELETE], either [targetIdentity] or [entry] must be provided.
+ * - Optional [streamSequence] carries a monotonic stream frame sequence (`>= 0`) so out-of-order
+ *   or replayed frames never overwrite newer state or resurrect deleted rows.
+ */
+data class StreamingHistoryRow(
+    val operation: StreamingRowOperation = StreamingRowOperation.UPSERT,
+    val entry: CanonicalHistoryEntry? = null,
+    val targetIdentity: HistoryEntryIdentity? = null,
+    val streamSequence: Long? = null,
+) {
+    init {
+        streamSequence?.let { checkIntBounds(it, min = 0L, max = Long.MAX_VALUE) }
+        when (operation) {
+            StreamingRowOperation.UPSERT -> {
+                val upsertEntry = requireNotNull(entry) {
+                    "UPSERT streaming row must provide an entry"
+                }
+                if (targetIdentity != null) {
+                    require(targetIdentity == HistoryReader.identityOf(upsertEntry)) {
+                        "UPSERT targetIdentity must match entry identity"
+                    }
+                }
+            }
+            StreamingRowOperation.DELETE -> {
+                require(targetIdentity != null || entry != null) {
+                    "DELETE streaming row must provide targetIdentity or entry"
+                }
+            }
+        }
+    }
+
+    /** Stable [HistoryEntryIdentity] targeted by this streaming row. */
+    val resolvedIdentity: HistoryEntryIdentity
+        get() = targetIdentity ?: HistoryReader.identityOf(requireNotNull(entry))
+
+    companion object {
+        /** Creates an [StreamingRowOperation.UPSERT] streaming row for [entry]. */
+        fun upsert(
+            entry: CanonicalHistoryEntry,
+            streamSequence: Long? = null,
+        ): StreamingHistoryRow = StreamingHistoryRow(
+            operation = StreamingRowOperation.UPSERT,
+            entry = entry.copy(source = HistoryEntrySource.STREAMED),
+            targetIdentity = HistoryReader.identityOf(entry),
+            streamSequence = streamSequence,
+        )
+
+        /** Creates a [StreamingRowOperation.DELETE] streaming row targeting [identity]. */
+        fun delete(
+            identity: HistoryEntryIdentity,
+            streamSequence: Long? = null,
+        ): StreamingHistoryRow = StreamingHistoryRow(
+            operation = StreamingRowOperation.DELETE,
+            entry = null,
+            targetIdentity = identity,
+            streamSequence = streamSequence,
+        )
+
+        /** Creates a [StreamingRowOperation.DELETE] streaming row targeting [entry]. */
+        fun delete(
+            entry: CanonicalHistoryEntry,
+            streamSequence: Long? = null,
+        ): StreamingHistoryRow = StreamingHistoryRow(
+            operation = StreamingRowOperation.DELETE,
+            entry = entry,
+            targetIdentity = HistoryReader.identityOf(entry),
+            streamSequence = streamSequence,
+        )
+    }
+}
+
+/**
  * Thread-safe reader and reconciler for canonical session history entries.
  *
  * Provides:
@@ -157,21 +308,18 @@ data class HistoryPage(
  *   IDs, and transient streaming flags.
  * - Cursor-based canonical history paging ([readPage]) with fixed-size subsets, opaque and stable
  *   keyset cursors, and duplicate-free traversal over static histories.
- * - Paged ingestion ([ingestPage]) supporting forward paging, reverse prepending, and overlapping
- *   pages without duplicating entries.
- * - Streaming reconciliation ([reconcileStreamed]) that upgrades streamed entries in place when
- *   authoritative canonical history arrives (including promoting unkeyed provisional streamed
- *   entries by [CanonicalHistoryEntry.contentHash] while preserving alias lookup).
+ * - Paged ingestion ([ingestPage], [reconcilePage]) supporting forward paging, reverse prepending,
+ *   overlapping pages, authoritative snapshot pruning, and structured diff detection.
+ * - Streaming reconciliation ([reconcileStreamed], [reconcileStream], [reconcile]) matching paged
+ *   canonical history rows to incoming streaming rows by stable identity, detecting inserts,
+ *   updates, and deletions while handling duplicates and out-of-order rows gracefully.
  */
 class HistoryReader(
     initialEntries: List<CanonicalHistoryEntry> = emptyList(),
 ) {
 
     private val lock = ReentrantReadWriteLock(true)
-    private val orderedIdentities = mutableListOf<HistoryEntryIdentity>()
-    private val entriesByIdentity = mutableMapOf<HistoryEntryIdentity, CanonicalHistoryEntry>()
-    private val identityAliases = mutableMapOf<HistoryEntryIdentity, HistoryEntryIdentity>()
-    private val identitiesByValue = mutableMapOf<String, HistoryEntryIdentity>()
+    private val ledger = HistoryLedger()
 
     init {
         if (initialEntries.isNotEmpty()) {
@@ -181,7 +329,7 @@ class HistoryReader(
 
     /** Number of distinct reconciled history entries currently held. */
     val size: Int
-        get() = lock.readLock().withLock { orderedIdentities.size }
+        get() = lock.readLock().withLock { ledger.size() }
 
     /**
      * Reads a fixed-size page of canonical history entries using opaque, stable keyset cursors.
@@ -222,11 +370,16 @@ class HistoryReader(
         }
 
         return lock.readLock().withLock {
-            val snapshot = filteredSnapshotLocked(durableSessionId, includeStreamed)
+            val snapshot = ledger.filteredSnapshot(durableSessionId, includeStreamed)
             val anchorIndex = anchorIdentity?.let { anchor ->
-                resolveAnchorIndexLocked(snapshot, anchor)
+                ledger.resolveAnchorIndex(snapshot, anchor)
             }
-            val (pageItems, nextAnchor) = sliceSnapshot(snapshot, pageSize, anchorIndex, direction)
+            val (pageItems, nextAnchor) = HistoryDiffEngine.sliceSnapshot(
+                snapshot = snapshot,
+                pageSize = pageSize,
+                anchorIndex = anchorIndex,
+                direction = direction,
+            )
             val nextCursor = nextAnchor?.let { anchor ->
                 HistoryCursorCodec.encode(anchor, direction, durableSessionId, includeStreamed)
             }
@@ -239,54 +392,6 @@ class HistoryReader(
         }
     }
 
-    private fun filteredSnapshotLocked(
-        durableSessionId: String?,
-        includeStreamed: Boolean,
-    ): List<Pair<HistoryEntryIdentity, CanonicalHistoryEntry>> {
-        return orderedIdentities.mapNotNull { id ->
-            val entry = entriesByIdentity[id]
-            val matchesSource = includeStreamed || entry?.source == HistoryEntrySource.CANONICAL_HISTORY
-            val matchesSession = durableSessionId == null || entry?.durableSessionId == durableSessionId
-            if (entry != null && matchesSource && matchesSession) id to entry else null
-        }
-    }
-
-    private fun resolveAnchorIndexLocked(
-        snapshot: List<Pair<HistoryEntryIdentity, CanonicalHistoryEntry>>,
-        anchor: HistoryEntryIdentity,
-    ): Int {
-        val resolved = identityAliases[anchor] ?: anchor
-        val idx = snapshot.indexOfFirst { (id, _) -> id == resolved }
-        if (idx < 0) {
-            throw InvalidHistoryCursorException("History cursor anchor entry was not found")
-        }
-        return idx
-    }
-
-    private fun sliceSnapshot(
-        snapshot: List<Pair<HistoryEntryIdentity, CanonicalHistoryEntry>>,
-        pageSize: Int,
-        anchorIndex: Int?,
-        direction: HistoryPageDirection,
-    ): Pair<List<Pair<HistoryEntryIdentity, CanonicalHistoryEntry>>, HistoryEntryIdentity?> {
-        return when (direction) {
-            HistoryPageDirection.FORWARD -> {
-                val start = anchorIndex?.plus(1) ?: 0
-                val end = minOf(start.toLong() + pageSize.toLong(), snapshot.size.toLong()).toInt()
-                val items = if (start < snapshot.size) snapshot.subList(start, end) else emptyList()
-                val anchor = if (end < snapshot.size && items.isNotEmpty()) items.last().first else null
-                items to anchor
-            }
-            HistoryPageDirection.BACKWARD -> {
-                val end = anchorIndex ?: snapshot.size
-                val start = maxOf(0L, end.toLong() - pageSize.toLong()).toInt()
-                val items = if (end > 0) snapshot.subList(start, end) else emptyList()
-                val anchor = if (start > 0 && items.isNotEmpty()) items.first().first else null
-                items to anchor
-            }
-        }
-    }
-
     /**
      * Ingests a [HistoryPage] of canonical entries into the reader, deduplicating by stable
      * identity and upgrading any matching streamed entries in place.
@@ -295,19 +400,41 @@ class HistoryReader(
      * entries. Returns the full reconciled entry list in display order.
      */
     fun ingestPage(page: HistoryPage, prepend: Boolean = false): List<CanonicalHistoryEntry> {
+        return reconcilePage(page = page, prepend = prepend).entries
+    }
+
+    /**
+     * Reconciles a canonical [HistoryPage] into the reader and returns the unified merged sequence
+     * along with the detected [HistoryReconciliationDiff] (inserts, updates, and deletions).
+     *
+     * - Set [prepend] to `true` when loading older pages ahead of already-loaded newer entries.
+     * - Set [pruneMissingInScope] to `true` when [page] represents an authoritative canonical
+     *   snapshot (for example after rollback or server-side deletion) so missing entries within
+     *   [durableSessionId] (or all sessions if `null`) are removed and reported as
+     *   [HistoryChangeKind.DELETE].
+     * - When [pruneMissingInScope] is `true`, [retainUnmatchedStreamed] controls whether live
+     *   [HistoryEntrySource.STREAMED] rows not yet present in canonical history are preserved.
+     */
+    fun reconcilePage(
+        page: HistoryPage,
+        prepend: Boolean = false,
+        pruneMissingInScope: Boolean = false,
+        durableSessionId: String? = null,
+        retainUnmatchedStreamed: Boolean = true,
+    ): HistoryReconciliationResult {
+        durableSessionId?.let { ensureIdNotNormalized(it) }
+        val options = PageReconciliationOptions(
+            prepend = prepend,
+            pruneMissingInScope = pruneMissingInScope,
+            durableSessionId = durableSessionId,
+            retainUnmatchedStreamed = retainUnmatchedStreamed,
+        )
         return lock.writeLock().withLock {
-            val prependBuffer = mutableListOf<HistoryEntryIdentity>()
-            for (rawEntry in page.entries) {
-                val canonicalEntry = rawEntry.copy(
-                    source = HistoryEntrySource.CANONICAL_HISTORY,
-                    isInterim = false,
-                )
-                upsertCanonicalLocked(canonicalEntry, prepend, prependBuffer)
-            }
-            if (prepend && prependBuffer.isNotEmpty()) {
-                orderedIdentities.addAll(0, prependBuffer)
-            }
-            orderedIdentities.mapNotNull { entriesByIdentity[it] }
+            HistoryReconciler.reconcilePage(
+                ledger = ledger,
+                page = page,
+                options = options,
+            )
         }
     }
 
@@ -318,30 +445,44 @@ class HistoryReader(
      *   same (or aliased) identity, the canonical entry is preserved and returned unchanged.
      * - If a [HistoryEntrySource.STREAMED] entry already exists for the same identity (for example,
      *   streaming delta updates sharing a [CanonicalHistoryEntry.canonicalKey]), it is updated in
-     *   place without changing its identity or position.
-     * - Otherwise the streamed entry is appended.
+     *   place without changing its identity or position unless out-of-order.
+     * - Otherwise the streamed entry is inserted in canonical sequence order (or appended).
      */
     fun reconcileStreamed(entry: CanonicalHistoryEntry): CanonicalHistoryEntry {
         return lock.writeLock().withLock {
             val streamedEntry = entry.copy(source = HistoryEntrySource.STREAMED)
             val rawIdentity = identityOf(streamedEntry)
-            val resolvedIdentity = identityAliases[rawIdentity] ?: rawIdentity
-            identitiesByValue[rawIdentity.value] = rawIdentity
+            val counters = ReconciliationCounters()
+            HistoryReconciler.applyStreamUpsert(
+                ledger = ledger,
+                request = StreamUpsertRequest(
+                    entry = streamedEntry,
+                    streamSequence = null,
+                    allowCanonicalUpdateFromStream = false,
+                ),
+                counters = counters,
+            )
+            val resolvedIdentity = ledger.resolveAlias(rawIdentity)
+            ledger.entriesByIdentity[resolvedIdentity] ?: streamedEntry
+        }
+    }
 
-            val existing = entriesByIdentity[resolvedIdentity]
-            if (existing != null) {
-                if (existing.source == HistoryEntrySource.CANONICAL_HISTORY) {
-                    return@withLock existing
-                }
-                entriesByIdentity[resolvedIdentity] = streamedEntry
-                identitiesByValue[resolvedIdentity.value] = resolvedIdentity
-                return@withLock streamedEntry
-            }
-
-            entriesByIdentity[resolvedIdentity] = streamedEntry
-            identitiesByValue[resolvedIdentity.value] = resolvedIdentity
-            orderedIdentities.add(resolvedIdentity)
-            streamedEntry
+    /**
+     * Reconciles a batch of incoming [StreamingHistoryRow] events (upserts and deletions) against
+     * the reader's current canonical and streamed history, returning the unified merged sequence
+     * and the net [HistoryReconciliationDiff] relative to the pre-reconciliation state.
+     *
+     * Duplicate rows and stale/out-of-order stream frames (by [StreamingHistoryRow.streamSequence],
+     * finalized-to-interim regression, or timestamp regression) are handled gracefully without
+     * duplication or state regression.
+     */
+    fun reconcileStream(rows: List<StreamingHistoryRow>): HistoryReconciliationResult {
+        return lock.writeLock().withLock {
+            HistoryReconciler.reconcileStreamBatch(
+                ledger = ledger,
+                rows = rows,
+                allowCanonicalUpdateFromStream = true,
+            )
         }
     }
 
@@ -351,8 +492,7 @@ class HistoryReader(
      */
     fun findByIdentity(identity: HistoryEntryIdentity): CanonicalHistoryEntry? {
         return lock.readLock().withLock {
-            val resolved = identityAliases[identity] ?: identity
-            entriesByIdentity[resolved]
+            ledger.findByIdentity(identity)
         }
     }
 
@@ -362,9 +502,7 @@ class HistoryReader(
      */
     fun findByStableId(stableId: String): CanonicalHistoryEntry? {
         return lock.readLock().withLock {
-            val identity = identitiesByValue[stableId] ?: return@withLock null
-            val resolved = identityAliases[identity] ?: identity
-            entriesByIdentity[resolved]
+            ledger.findByStableId(stableId)
         }
     }
 
@@ -382,72 +520,21 @@ class HistoryReader(
      */
     fun resolveIdentity(identity: HistoryEntryIdentity): HistoryEntryIdentity {
         return lock.readLock().withLock {
-            identityAliases[identity] ?: identity
+            ledger.resolveAlias(identity)
         }
     }
 
     /** Returns an immutable snapshot of all reconciled history entries in order. */
     fun entries(): List<CanonicalHistoryEntry> {
         return lock.readLock().withLock {
-            orderedIdentities.mapNotNull { entriesByIdentity[it] }
+            ledger.entries()
         }
     }
 
-    /** Clears all ingested entries and reconciliation aliases from this reader. */
+    /** Clears all ingested entries, stream watermarks, and reconciliation aliases from this reader. */
     fun clear() {
         lock.writeLock().withLock {
-            orderedIdentities.clear()
-            entriesByIdentity.clear()
-            identityAliases.clear()
-            identitiesByValue.clear()
-        }
-    }
-
-    private fun upsertCanonicalLocked(
-        canonicalEntry: CanonicalHistoryEntry,
-        prepend: Boolean,
-        prependBuffer: MutableList<HistoryEntryIdentity>,
-    ) {
-        val identity = identityOf(canonicalEntry)
-        identitiesByValue[identity.value] = identity
-
-        if (entriesByIdentity.containsKey(identity)) {
-            entriesByIdentity[identity] = canonicalEntry
-            return
-        }
-
-        if (identity.scheme != HistoryEntryIdentityScheme.CONTENT_HASH) {
-            val incomingHash = contentHashOf(canonicalEntry)
-            val provisionalIdx = orderedIdentities.indexOfFirst { existingId ->
-                val existing = entriesByIdentity[existingId]
-                val schemeUpgrade = existingId.scheme == HistoryEntryIdentityScheme.CONTENT_HASH ||
-                    (
-                        existingId.scheme == HistoryEntryIdentityScheme.POSITIONED_CONTENT_HASH &&
-                            identity.scheme == HistoryEntryIdentityScheme.IMMUTABLE_KEY &&
-                            existing?.canonicalSequence == canonicalEntry.canonicalSequence
-                        )
-                existing != null &&
-                    existing.source == HistoryEntrySource.STREAMED &&
-                    schemeUpgrade &&
-                    existing.durableSessionId == canonicalEntry.durableSessionId &&
-                    contentHashOf(existing) == incomingHash
-            }
-            if (provisionalIdx >= 0) {
-                val provisionalId = orderedIdentities[provisionalIdx]
-                entriesByIdentity.remove(provisionalId)
-                entriesByIdentity[identity] = canonicalEntry
-                orderedIdentities[provisionalIdx] = identity
-                identityAliases[provisionalId] = identity
-                identitiesByValue[provisionalId.value] = provisionalId
-                return
-            }
-        }
-
-        entriesByIdentity[identity] = canonicalEntry
-        if (prepend) {
-            prependBuffer.add(identity)
-        } else {
-            orderedIdentities.add(identity)
+            ledger.clear()
         }
     }
 
@@ -528,6 +615,52 @@ class HistoryReader(
             }
         }
 
+        /**
+         * Reconciles [pagedHistory] canonical rows with incoming [streamingRows] using stable
+         * identities, producing a unified duplicate-free merged sequence and structured diff
+         * (inserts, updates, and deletions) relative to [pagedHistory].
+         */
+        fun reconcile(
+            pagedHistory: List<CanonicalHistoryEntry>,
+            streamingRows: List<StreamingHistoryRow>,
+        ): HistoryReconciliationResult {
+            val reader = HistoryReader()
+            val pageResult = reader.reconcilePage(HistoryPage(pagedHistory))
+            val streamResult = reader.reconcileStream(streamingRows)
+            return streamResult.copy(
+                ignoredDuplicates = pageResult.ignoredDuplicates + streamResult.ignoredDuplicates,
+            )
+        }
+
+        /**
+         * Convenience overload of [reconcile] for raw [CanonicalHistoryEntry] streaming rows
+         * treated as [StreamingRowOperation.UPSERT] events.
+         */
+        fun reconcileEntries(
+            pagedHistory: List<CanonicalHistoryEntry>,
+            streamingEntries: List<CanonicalHistoryEntry>,
+        ): HistoryReconciliationResult {
+            return reconcile(
+                pagedHistory = pagedHistory,
+                streamingRows = streamingEntries.map { StreamingHistoryRow.upsert(it) },
+            )
+        }
+
+        /**
+         * Computes the structured [HistoryReconciliationDiff] (inserts, updates, and deletions)
+         * transforming [previous] into [current] using deterministic stable identities and
+         * optional provisional-to-canonical [identityAliases].
+         */
+        fun diff(
+            previous: List<CanonicalHistoryEntry>,
+            current: List<CanonicalHistoryEntry>,
+            identityAliases: Map<HistoryEntryIdentity, HistoryEntryIdentity> = emptyMap(),
+        ): HistoryReconciliationDiff {
+            val beforeSnapshot = previous.map { identityOf(it) to it }
+            val afterSnapshot = current.map { identityOf(it) to it }
+            return HistoryDiffEngine.computeDiff(beforeSnapshot, afterSnapshot, identityAliases)
+        }
+
         private fun sha256Hex(buildPayload: (MessageDigest) -> Unit): String {
             val digest = MessageDigest.getInstance(HASH_ALGORITHM)
             buildPayload(digest)
@@ -547,6 +680,650 @@ class HistoryReader(
             update(bytes)
         }
     }
+}
+
+private class ReconciliationCounters(
+    var ignoredDuplicates: Int = 0,
+    var ignoredOutOfOrder: Int = 0,
+)
+
+private enum class StreamOrderDecision {
+    ACCEPT,
+    DUPLICATE,
+    OUT_OF_ORDER,
+}
+
+private class HistoryLedger {
+    val orderedIdentities = mutableListOf<HistoryEntryIdentity>()
+    val entriesByIdentity = mutableMapOf<HistoryEntryIdentity, CanonicalHistoryEntry>()
+    val identityAliases = mutableMapOf<HistoryEntryIdentity, HistoryEntryIdentity>()
+    val identitiesByValue = mutableMapOf<String, HistoryEntryIdentity>()
+    val lastStreamSequence = mutableMapOf<HistoryEntryIdentity, Long>()
+    val deletedIdentities = mutableSetOf<HistoryEntryIdentity>()
+
+    fun size(): Int = orderedIdentities.size
+
+    fun entries(): List<CanonicalHistoryEntry> = orderedIdentities.mapNotNull { entriesByIdentity[it] }
+
+    fun snapshot(): List<Pair<HistoryEntryIdentity, CanonicalHistoryEntry>> {
+        return orderedIdentities.mapNotNull { id ->
+            entriesByIdentity[id]?.let { id to it }
+        }
+    }
+
+    fun filteredSnapshot(
+        durableSessionId: String?,
+        includeStreamed: Boolean,
+    ): List<Pair<HistoryEntryIdentity, CanonicalHistoryEntry>> {
+        return orderedIdentities.mapNotNull { id ->
+            val entry = entriesByIdentity[id]
+            val matchesSource = includeStreamed || entry?.source == HistoryEntrySource.CANONICAL_HISTORY
+            val matchesSession = durableSessionId == null || entry?.durableSessionId == durableSessionId
+            if (entry != null && matchesSource && matchesSession) id to entry else null
+        }
+    }
+
+    fun resolveAnchorIndex(
+        snapshot: List<Pair<HistoryEntryIdentity, CanonicalHistoryEntry>>,
+        anchor: HistoryEntryIdentity,
+    ): Int {
+        val resolved = resolveAlias(anchor)
+        val idx = snapshot.indexOfFirst { (id, _) -> id == resolved }
+        if (idx < 0) {
+            throw InvalidHistoryCursorException("History cursor anchor entry was not found")
+        }
+        return idx
+    }
+
+    fun resolveAlias(identity: HistoryEntryIdentity): HistoryEntryIdentity {
+        return HistoryDiffEngine.resolveAliasChain(identity, identityAliases)
+    }
+
+    fun recordAlias(provisionalId: HistoryEntryIdentity, canonicalId: HistoryEntryIdentity) {
+        if (provisionalId == canonicalId) return
+        identityAliases[provisionalId] = canonicalId
+        identitiesByValue[provisionalId.value] = provisionalId
+        identitiesByValue[canonicalId.value] = canonicalId
+        for ((aliasKey, aliasTarget) in identityAliases.entries.toList()) {
+            if (aliasTarget == provisionalId) {
+                identityAliases[aliasKey] = canonicalId
+            }
+        }
+    }
+
+    fun findByIdentity(identity: HistoryEntryIdentity): CanonicalHistoryEntry? {
+        return entriesByIdentity[resolveAlias(identity)]
+    }
+
+    fun findByStableId(stableId: String): CanonicalHistoryEntry? {
+        val identity = identitiesByValue[stableId]
+        return identity?.let { entriesByIdentity[resolveAlias(it)] }
+    }
+
+    fun insertOrdered(identity: HistoryEntryIdentity, entry: CanonicalHistoryEntry) {
+        val sequence = entry.canonicalSequence
+        val insertIndex = if (sequence != null) {
+            orderedIdentities.indexOfFirst { existingId ->
+                val existing = entriesByIdentity[existingId]
+                existing != null &&
+                    existing.durableSessionId == entry.durableSessionId &&
+                    existing.canonicalSequence != null &&
+                    existing.canonicalSequence > sequence
+            }
+        } else {
+            -1
+        }
+        if (insertIndex >= 0) {
+            orderedIdentities.add(insertIndex, identity)
+        } else {
+            orderedIdentities.add(identity)
+        }
+    }
+
+    fun repositionIfOutOfOrder(identity: HistoryEntryIdentity, entry: CanonicalHistoryEntry) {
+        val sequence = entry.canonicalSequence ?: return
+        val currentIndex = orderedIdentities.indexOf(identity)
+        if (currentIndex < 0) return
+
+        val hasGreaterBefore = (0 until currentIndex).any { idx ->
+            val other = entriesByIdentity[orderedIdentities[idx]]
+            other != null &&
+                other.durableSessionId == entry.durableSessionId &&
+                other.canonicalSequence != null &&
+                other.canonicalSequence > sequence
+        }
+        val hasSmallerAfter = ((currentIndex + 1) until orderedIdentities.size).any { idx ->
+            val other = entriesByIdentity[orderedIdentities[idx]]
+            other != null &&
+                other.durableSessionId == entry.durableSessionId &&
+                other.canonicalSequence != null &&
+                other.canonicalSequence < sequence
+        }
+        if (hasGreaterBefore || hasSmallerAfter) {
+            orderedIdentities.removeAt(currentIndex)
+            insertOrdered(identity, entry)
+        }
+    }
+
+    fun findMatchingProvisionalStreamedIndex(
+        canonicalEntry: CanonicalHistoryEntry,
+        identity: HistoryEntryIdentity,
+    ): Int {
+        if (identity.scheme == HistoryEntryIdentityScheme.CONTENT_HASH) {
+            return -1
+        }
+        val incomingHash = HistoryReader.contentHashOf(canonicalEntry)
+        return orderedIdentities.indexOfFirst { existingId ->
+            val existing = entriesByIdentity[existingId]
+            val schemeUpgrade = existingId.scheme == HistoryEntryIdentityScheme.CONTENT_HASH ||
+                (
+                    existingId.scheme == HistoryEntryIdentityScheme.POSITIONED_CONTENT_HASH &&
+                        identity.scheme == HistoryEntryIdentityScheme.IMMUTABLE_KEY &&
+                        existing?.canonicalSequence == canonicalEntry.canonicalSequence
+                    )
+            existing != null &&
+                existing.source == HistoryEntrySource.STREAMED &&
+                schemeUpgrade &&
+                existing.durableSessionId == canonicalEntry.durableSessionId &&
+                HistoryReader.contentHashOf(existing) == incomingHash
+        }
+    }
+
+    fun findMatchingCanonicalIdentity(
+        streamedEntry: CanonicalHistoryEntry,
+        streamedIdentity: HistoryEntryIdentity,
+    ): HistoryEntryIdentity? {
+        if (streamedIdentity.scheme == HistoryEntryIdentityScheme.IMMUTABLE_KEY) {
+            return null
+        }
+        val incomingHash = HistoryReader.contentHashOf(streamedEntry)
+        val matchIdx = orderedIdentities.indexOfLast { existingId ->
+            val existing = entriesByIdentity[existingId]
+            val schemeDowngrade = when (streamedIdentity.scheme) {
+                HistoryEntryIdentityScheme.CONTENT_HASH ->
+                    existingId.scheme != HistoryEntryIdentityScheme.CONTENT_HASH
+                HistoryEntryIdentityScheme.POSITIONED_CONTENT_HASH ->
+                    existingId.scheme == HistoryEntryIdentityScheme.IMMUTABLE_KEY &&
+                        existing?.canonicalSequence == streamedEntry.canonicalSequence
+                HistoryEntryIdentityScheme.IMMUTABLE_KEY -> false
+            }
+            existing != null &&
+                existing.source == HistoryEntrySource.CANONICAL_HISTORY &&
+                schemeDowngrade &&
+                existing.durableSessionId == streamedEntry.durableSessionId &&
+                HistoryReader.contentHashOf(existing) == incomingHash
+        }
+        return if (matchIdx >= 0) orderedIdentities[matchIdx] else null
+    }
+
+    fun clear() {
+        orderedIdentities.clear()
+        entriesByIdentity.clear()
+        identityAliases.clear()
+        identitiesByValue.clear()
+        lastStreamSequence.clear()
+        deletedIdentities.clear()
+    }
+}
+
+private data class PageReconciliationOptions(
+    val prepend: Boolean,
+    val pruneMissingInScope: Boolean,
+    val durableSessionId: String?,
+    val retainUnmatchedStreamed: Boolean,
+)
+
+private class PageReconciliationState(
+    val prepend: Boolean,
+    val prependBuffer: MutableList<HistoryEntryIdentity> = mutableListOf(),
+    val seenInPage: MutableSet<HistoryEntryIdentity> = mutableSetOf(),
+    val counters: ReconciliationCounters = ReconciliationCounters(),
+)
+
+private data class StreamUpsertRequest(
+    val entry: CanonicalHistoryEntry,
+    val streamSequence: Long?,
+    val allowCanonicalUpdateFromStream: Boolean,
+)
+
+private object HistoryReconciler {
+
+    fun reconcilePage(
+        ledger: HistoryLedger,
+        page: HistoryPage,
+        options: PageReconciliationOptions,
+    ): HistoryReconciliationResult {
+        val before = ledger.snapshot()
+        val state = PageReconciliationState(prepend = options.prepend)
+
+        for (rawEntry in page.entries) {
+            val canonicalEntry = rawEntry.copy(
+                source = HistoryEntrySource.CANONICAL_HISTORY,
+                isInterim = false,
+            )
+            upsertCanonicalEntry(ledger, canonicalEntry, state)
+        }
+        if (options.prepend && state.prependBuffer.isNotEmpty()) {
+            ledger.orderedIdentities.addAll(0, state.prependBuffer)
+        }
+        if (options.pruneMissingInScope) {
+            pruneMissingEntries(ledger, state.seenInPage, options)
+        }
+
+        val after = ledger.snapshot()
+        val diff = HistoryDiffEngine.computeDiff(before, after, ledger.identityAliases)
+        return HistoryReconciliationResult(
+            entries = after.map { it.second },
+            diff = diff,
+            identityAliases = ledger.identityAliases.toMap(),
+            ignoredDuplicates = state.counters.ignoredDuplicates,
+            ignoredOutOfOrder = state.counters.ignoredOutOfOrder,
+        )
+    }
+
+    private fun upsertCanonicalEntry(
+        ledger: HistoryLedger,
+        canonicalEntry: CanonicalHistoryEntry,
+        state: PageReconciliationState,
+    ) {
+        val identity = HistoryReader.identityOf(canonicalEntry)
+        ledger.identitiesByValue[identity.value] = identity
+        val isRepeatInPage = !state.seenInPage.add(identity)
+        ledger.deletedIdentities.remove(identity)
+        ledger.lastStreamSequence.remove(identity)
+
+        val existing = ledger.entriesByIdentity[identity]
+        val provisionalIdx = if (existing == null) {
+            ledger.findMatchingProvisionalStreamedIndex(canonicalEntry, identity)
+        } else {
+            -1
+        }
+
+        when {
+            existing != null -> {
+                if (existing.source == HistoryEntrySource.CANONICAL_HISTORY &&
+                    HistoryDiffEngine.sameDurableFields(existing, canonicalEntry)
+                ) {
+                    state.counters.ignoredDuplicates++
+                }
+                ledger.entriesByIdentity[identity] = canonicalEntry
+                ledger.repositionIfOutOfOrder(identity, canonicalEntry)
+            }
+            provisionalIdx >= 0 -> {
+                val provisionalId = ledger.orderedIdentities[provisionalIdx]
+                ledger.entriesByIdentity.remove(provisionalId)
+                ledger.entriesByIdentity[identity] = canonicalEntry
+                ledger.orderedIdentities[provisionalIdx] = identity
+                ledger.recordAlias(provisionalId, identity)
+                ledger.lastStreamSequence.remove(provisionalId)
+                ledger.deletedIdentities.remove(provisionalId)
+                ledger.repositionIfOutOfOrder(identity, canonicalEntry)
+            }
+            isRepeatInPage -> state.counters.ignoredDuplicates++
+            else -> {
+                ledger.entriesByIdentity[identity] = canonicalEntry
+                if (state.prepend) {
+                    state.prependBuffer.add(identity)
+                } else {
+                    ledger.insertOrdered(identity, canonicalEntry)
+                }
+            }
+        }
+    }
+
+    private fun pruneMissingEntries(
+        ledger: HistoryLedger,
+        seenInPage: Set<HistoryEntryIdentity>,
+        options: PageReconciliationOptions,
+    ) {
+        val toRemove = ledger.orderedIdentities.filter { id ->
+            val entry = ledger.entriesByIdentity[id]
+            val inSession = options.durableSessionId == null ||
+                entry?.durableSessionId == options.durableSessionId
+            val removableSource = !options.retainUnmatchedStreamed ||
+                entry?.source == HistoryEntrySource.CANONICAL_HISTORY
+            entry != null && inSession && removableSource && id !in seenInPage
+        }
+        for (id in toRemove) {
+            ledger.orderedIdentities.remove(id)
+            ledger.entriesByIdentity.remove(id)
+            ledger.deletedIdentities.add(id)
+        }
+    }
+
+    fun reconcileStreamBatch(
+        ledger: HistoryLedger,
+        rows: List<StreamingHistoryRow>,
+        allowCanonicalUpdateFromStream: Boolean,
+    ): HistoryReconciliationResult {
+        val before = ledger.snapshot()
+        val counters = ReconciliationCounters()
+        for (row in rows) {
+            when (row.operation) {
+                StreamingRowOperation.UPSERT -> applyStreamUpsert(
+                    ledger = ledger,
+                    request = StreamUpsertRequest(
+                        entry = requireNotNull(row.entry).copy(source = HistoryEntrySource.STREAMED),
+                        streamSequence = row.streamSequence,
+                        allowCanonicalUpdateFromStream = allowCanonicalUpdateFromStream,
+                    ),
+                    counters = counters,
+                )
+                StreamingRowOperation.DELETE -> applyStreamDelete(ledger, row, counters)
+            }
+        }
+        val after = ledger.snapshot()
+        val diff = HistoryDiffEngine.computeDiff(before, after, ledger.identityAliases)
+        return HistoryReconciliationResult(
+            entries = after.map { it.second },
+            diff = diff,
+            identityAliases = ledger.identityAliases.toMap(),
+            ignoredDuplicates = counters.ignoredDuplicates,
+            ignoredOutOfOrder = counters.ignoredOutOfOrder,
+        )
+    }
+
+    fun applyStreamUpsert(
+        ledger: HistoryLedger,
+        request: StreamUpsertRequest,
+        counters: ReconciliationCounters,
+    ) {
+        val rawIdentity = HistoryReader.identityOf(request.entry)
+        ledger.identitiesByValue[rawIdentity.value] = rawIdentity
+        var resolvedId = ledger.resolveAlias(rawIdentity)
+
+        if (!ledger.entriesByIdentity.containsKey(resolvedId)) {
+            val canonicalMatch = ledger.findMatchingCanonicalIdentity(request.entry, resolvedId)
+            if (canonicalMatch != null) {
+                ledger.recordAlias(resolvedId, canonicalMatch)
+                resolvedId = canonicalMatch
+            }
+        }
+
+        val existing = ledger.entriesByIdentity[resolvedId]
+        if (existing != null) {
+            applyStreamUpsertExisting(ledger, resolvedId, existing, request, counters)
+            return
+        }
+
+        val lastSeq = ledger.lastStreamSequence[resolvedId]
+        val seqDecision = checkStreamSequence(lastSeq, request.streamSequence, isDuplicateContent = false)
+        if (seqDecision != StreamOrderDecision.ACCEPT) {
+            recordIgnored(seqDecision, counters)
+            return
+        }
+
+        ledger.deletedIdentities.remove(resolvedId)
+        ledger.entriesByIdentity[resolvedId] = request.entry
+        ledger.identitiesByValue[resolvedId.value] = resolvedId
+        ledger.insertOrdered(resolvedId, request.entry)
+        if (request.streamSequence != null) {
+            ledger.lastStreamSequence[resolvedId] = request.streamSequence
+        }
+    }
+
+    private fun applyStreamUpsertExisting(
+        ledger: HistoryLedger,
+        resolvedId: HistoryEntryIdentity,
+        existing: CanonicalHistoryEntry,
+        request: StreamUpsertRequest,
+        counters: ReconciliationCounters,
+    ) {
+        val incoming = request.entry
+        val lastSeq = ledger.lastStreamSequence[resolvedId]
+        val sameContent = HistoryReader.contentHashOf(existing) == HistoryReader.contentHashOf(incoming)
+        val isCanonical = existing.source == HistoryEntrySource.CANONICAL_HISTORY
+        val isDuplicate = if (isCanonical) {
+            sameContent && !incoming.isInterim
+        } else {
+            sameContent &&
+                existing.isInterim == incoming.isInterim &&
+                (incoming.canonicalSequence == null || incoming.canonicalSequence == existing.canonicalSequence)
+        }
+
+        val seqDecision = checkStreamSequence(lastSeq, request.streamSequence, isDuplicate)
+        val decision = if (seqDecision != StreamOrderDecision.ACCEPT) {
+            seqDecision
+        } else {
+            evaluateExistingUpsertDecision(existing, request, isDuplicate)
+        }
+
+        if (decision != StreamOrderDecision.ACCEPT) {
+            if (decision == StreamOrderDecision.DUPLICATE && request.streamSequence != null) {
+                ledger.lastStreamSequence[resolvedId] = request.streamSequence
+            }
+            recordIgnored(decision, counters)
+            return
+        }
+
+        val merged = incoming.copy(
+            source = HistoryEntrySource.STREAMED,
+            canonicalSequence = incoming.canonicalSequence ?: existing.canonicalSequence,
+            timestampEpochMillis = incoming.timestampEpochMillis ?: existing.timestampEpochMillis,
+        )
+        ledger.entriesByIdentity[resolvedId] = merged
+        ledger.identitiesByValue[resolvedId.value] = resolvedId
+        ledger.repositionIfOutOfOrder(resolvedId, merged)
+        if (request.streamSequence != null) {
+            ledger.lastStreamSequence[resolvedId] = request.streamSequence
+        }
+    }
+
+    private fun evaluateExistingUpsertDecision(
+        existing: CanonicalHistoryEntry,
+        request: StreamUpsertRequest,
+        isDuplicate: Boolean,
+    ): StreamOrderDecision {
+        val incoming = request.entry
+        val isCanonical = existing.source == HistoryEntrySource.CANONICAL_HISTORY
+        val isTimestampRegression = request.streamSequence == null &&
+            existing.timestampEpochMillis != null &&
+            incoming.timestampEpochMillis != null &&
+            incoming.timestampEpochMillis < existing.timestampEpochMillis
+        return when {
+            isCanonical && incoming.isInterim -> StreamOrderDecision.OUT_OF_ORDER
+            isDuplicate -> StreamOrderDecision.DUPLICATE
+            isCanonical && !request.allowCanonicalUpdateFromStream -> StreamOrderDecision.OUT_OF_ORDER
+            !existing.isInterim && incoming.isInterim -> StreamOrderDecision.OUT_OF_ORDER
+            isTimestampRegression -> StreamOrderDecision.OUT_OF_ORDER
+            else -> StreamOrderDecision.ACCEPT
+        }
+    }
+
+    private fun applyStreamDelete(
+        ledger: HistoryLedger,
+        row: StreamingHistoryRow,
+        counters: ReconciliationCounters,
+    ) {
+        val rawIdentity = row.resolvedIdentity
+        var resolvedId = ledger.resolveAlias(rawIdentity)
+        if (!ledger.entriesByIdentity.containsKey(resolvedId) && row.entry != null) {
+            val canonicalMatch = ledger.findMatchingCanonicalIdentity(row.entry, resolvedId)
+            if (canonicalMatch != null) {
+                ledger.recordAlias(resolvedId, canonicalMatch)
+                resolvedId = canonicalMatch
+            }
+        }
+
+        val lastSeq = ledger.lastStreamSequence[resolvedId]
+        val alreadyDeleted = resolvedId in ledger.deletedIdentities &&
+            !ledger.entriesByIdentity.containsKey(resolvedId)
+        val seqDecision = checkStreamSequence(lastSeq, row.streamSequence, isDuplicateContent = alreadyDeleted)
+        if (seqDecision != StreamOrderDecision.ACCEPT) {
+            recordIgnored(seqDecision, counters)
+            return
+        }
+
+        val removed = ledger.entriesByIdentity.remove(resolvedId)
+        if (removed != null) {
+            ledger.orderedIdentities.remove(resolvedId)
+            ledger.deletedIdentities.add(resolvedId)
+        } else if (alreadyDeleted) {
+            counters.ignoredDuplicates++
+        }
+        if (row.streamSequence != null) {
+            ledger.lastStreamSequence[resolvedId] = row.streamSequence
+        }
+    }
+
+    private fun checkStreamSequence(
+        lastSeq: Long?,
+        incomingSeq: Long?,
+        isDuplicateContent: Boolean,
+    ): StreamOrderDecision {
+        return when {
+            incomingSeq == null || lastSeq == null -> StreamOrderDecision.ACCEPT
+            incomingSeq < lastSeq -> StreamOrderDecision.OUT_OF_ORDER
+            incomingSeq == lastSeq -> if (isDuplicateContent) {
+                StreamOrderDecision.DUPLICATE
+            } else {
+                StreamOrderDecision.OUT_OF_ORDER
+            }
+            else -> StreamOrderDecision.ACCEPT
+        }
+    }
+
+    private fun recordIgnored(decision: StreamOrderDecision, counters: ReconciliationCounters) {
+        when (decision) {
+            StreamOrderDecision.DUPLICATE -> counters.ignoredDuplicates++
+            StreamOrderDecision.OUT_OF_ORDER -> counters.ignoredOutOfOrder++
+            StreamOrderDecision.ACCEPT -> Unit
+        }
+    }
+}
+
+private object HistoryDiffEngine {
+
+    fun sliceSnapshot(
+        snapshot: List<Pair<HistoryEntryIdentity, CanonicalHistoryEntry>>,
+        pageSize: Int,
+        anchorIndex: Int?,
+        direction: HistoryPageDirection,
+    ): Pair<List<Pair<HistoryEntryIdentity, CanonicalHistoryEntry>>, HistoryEntryIdentity?> {
+        return when (direction) {
+            HistoryPageDirection.FORWARD -> {
+                val start = anchorIndex?.plus(1) ?: 0
+                val end = minOf(start.toLong() + pageSize.toLong(), snapshot.size.toLong()).toInt()
+                val items = if (start < snapshot.size) snapshot.subList(start, end) else emptyList()
+                val anchor = if (end < snapshot.size && items.isNotEmpty()) items.last().first else null
+                items to anchor
+            }
+            HistoryPageDirection.BACKWARD -> {
+                val end = anchorIndex ?: snapshot.size
+                val start = maxOf(0L, end.toLong() - pageSize.toLong()).toInt()
+                val items = if (end > 0) snapshot.subList(start, end) else emptyList()
+                val anchor = if (start > 0 && items.isNotEmpty()) items.first().first else null
+                items to anchor
+            }
+        }
+    }
+
+    fun computeDiff(
+        before: List<Pair<HistoryEntryIdentity, CanonicalHistoryEntry>>,
+        after: List<Pair<HistoryEntryIdentity, CanonicalHistoryEntry>>,
+        aliases: Map<HistoryEntryIdentity, HistoryEntryIdentity>,
+    ): HistoryReconciliationDiff {
+        val beforeByEffectiveId = LinkedHashMap<HistoryEntryIdentity, IndexedBeforeEntry>(before.size)
+        before.forEachIndexed { index, (beforeId, entry) ->
+            val effectiveId = resolveAliasChain(beforeId, aliases)
+            beforeByEffectiveId[effectiveId] = IndexedBeforeEntry(index, beforeId, entry)
+        }
+        val afterIds = after.map { it.first }.toSet()
+        val changes = mutableListOf<HistoryReconciliationChange>()
+
+        for ((effectiveId, prev) in beforeByEffectiveId) {
+            if (effectiveId !in afterIds) {
+                changes.add(
+                    HistoryReconciliationChange(
+                        kind = HistoryChangeKind.DELETE,
+                        identity = effectiveId,
+                        previousIdentity = prev.originalId.takeIf { it != effectiveId },
+                        previous = prev.entry,
+                        current = null,
+                        previousIndex = prev.index,
+                        currentIndex = null,
+                    ),
+                )
+            }
+        }
+
+        after.forEachIndexed { afterIndex, (afterId, afterEntry) ->
+            val prev = beforeByEffectiveId[afterId]
+            if (prev == null) {
+                changes.add(
+                    HistoryReconciliationChange(
+                        kind = HistoryChangeKind.INSERT,
+                        identity = afterId,
+                        previousIdentity = null,
+                        previous = null,
+                        current = afterEntry,
+                        previousIndex = null,
+                        currentIndex = afterIndex,
+                    ),
+                )
+            } else if (hasSemanticChange(prev.originalId, afterId, prev.entry, afterEntry)) {
+                changes.add(
+                    HistoryReconciliationChange(
+                        kind = HistoryChangeKind.UPDATE,
+                        identity = afterId,
+                        previousIdentity = prev.originalId.takeIf { it != afterId },
+                        previous = prev.entry,
+                        current = afterEntry,
+                        previousIndex = prev.index,
+                        currentIndex = afterIndex,
+                    ),
+                )
+            }
+        }
+
+        return HistoryReconciliationDiff(changes)
+    }
+
+    private fun hasSemanticChange(
+        beforeId: HistoryEntryIdentity,
+        afterId: HistoryEntryIdentity,
+        beforeEntry: CanonicalHistoryEntry,
+        afterEntry: CanonicalHistoryEntry,
+    ): Boolean {
+        return beforeId != afterId ||
+            beforeEntry.source != afterEntry.source ||
+            beforeEntry.isInterim != afterEntry.isInterim ||
+            !sameDurableFields(beforeEntry, afterEntry)
+    }
+
+    fun sameDurableFields(
+        first: CanonicalHistoryEntry,
+        second: CanonicalHistoryEntry,
+    ): Boolean {
+        return first.durableSessionId == second.durableSessionId &&
+            first.role == second.role &&
+            first.kind == second.kind &&
+            first.content == second.content &&
+            first.canonicalKey == second.canonicalKey &&
+            first.canonicalSequence == second.canonicalSequence &&
+            first.toolCallId == second.toolCallId &&
+            first.canonicalAttributes == second.canonicalAttributes &&
+            first.timestampEpochMillis == second.timestampEpochMillis
+    }
+
+    fun resolveAliasChain(
+        identity: HistoryEntryIdentity,
+        aliases: Map<HistoryEntryIdentity, HistoryEntryIdentity>,
+    ): HistoryEntryIdentity {
+        var current = identity
+        val visited = mutableSetOf<HistoryEntryIdentity>()
+        while (visited.add(current)) {
+            val next = aliases[current] ?: break
+            current = next
+        }
+        return current
+    }
+
+    private data class IndexedBeforeEntry(
+        val index: Int,
+        val originalId: HistoryEntryIdentity,
+        val entry: CanonicalHistoryEntry,
+    )
 }
 
 private object HistoryCursorCodec {
