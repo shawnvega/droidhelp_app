@@ -4,6 +4,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
 import java.nio.ByteBuffer
 import java.security.MessageDigest
+import java.util.Base64
 import java.util.Locale
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.withLock
@@ -115,6 +116,27 @@ data class CanonicalHistoryEntry(
 }
 
 /**
+ * Traversal direction for cursor-based canonical history paging.
+ *
+ * - [FORWARD]: Pages chronologically from oldest to newest entries.
+ * - [BACKWARD]: Pages from newest toward oldest entries while preserving chronological order within
+ *   each returned [HistoryPage.entries] slice so pages can be prepended cleanly.
+ */
+enum class HistoryPageDirection {
+    FORWARD,
+    BACKWARD,
+}
+
+/**
+ * Thrown when a caller supplies a malformed, tampered, scope-mismatched, or unresolvable paging
+ * cursor to [HistoryReader.readPage].
+ */
+class InvalidHistoryCursorException(
+    message: String,
+    cause: Throwable? = null,
+) : IllegalArgumentException(message, cause)
+
+/**
  * A single page of canonical history entries returned by a paged history fetch.
  *
  * Paging metadata ([cursor], [nextCursor], [hasMore]) never affects entry identities.
@@ -133,13 +155,17 @@ data class HistoryPage(
  * - Deterministic, collision-resistant stable identities ([identityOf], [contentHashOf]) that are
  *   invariant to paging boundaries, cursors, page offsets, timestamps, volatile runtime session
  *   IDs, and transient streaming flags.
+ * - Cursor-based canonical history paging ([readPage]) with fixed-size subsets, opaque and stable
+ *   keyset cursors, and duplicate-free traversal over static histories.
  * - Paged ingestion ([ingestPage]) supporting forward paging, reverse prepending, and overlapping
  *   pages without duplicating entries.
  * - Streaming reconciliation ([reconcileStreamed]) that upgrades streamed entries in place when
  *   authoritative canonical history arrives (including promoting unkeyed provisional streamed
  *   entries by [CanonicalHistoryEntry.contentHash] while preserving alias lookup).
  */
-class HistoryReader {
+class HistoryReader(
+    initialEntries: List<CanonicalHistoryEntry> = emptyList(),
+) {
 
     private val lock = ReentrantReadWriteLock(true)
     private val orderedIdentities = mutableListOf<HistoryEntryIdentity>()
@@ -147,9 +173,119 @@ class HistoryReader {
     private val identityAliases = mutableMapOf<HistoryEntryIdentity, HistoryEntryIdentity>()
     private val identitiesByValue = mutableMapOf<String, HistoryEntryIdentity>()
 
+    init {
+        if (initialEntries.isNotEmpty()) {
+            ingestPage(HistoryPage(initialEntries))
+        }
+    }
+
     /** Number of distinct reconciled history entries currently held. */
     val size: Int
         get() = lock.readLock().withLock { orderedIdentities.size }
+
+    /**
+     * Reads a fixed-size page of canonical history entries using opaque, stable keyset cursors.
+     *
+     * - Returns up to [pageSize] entries in chronological order.
+     * - [HistoryPage.hasMore] is `true` if and only if additional entries remain beyond this page,
+     *   in which case [HistoryPage.nextCursor] carries an opaque, deterministic cursor anchored to
+     *   the boundary entry's stable identity; otherwise [HistoryPage.nextCursor] is `null`.
+     * - Iterating from `cursor = null` while [HistoryPage.hasMore] is `true` over a static history
+     *   visits every matching entry exactly once without duplicates or gaps.
+     *
+     * @param pageSize Maximum number of entries in the returned page (must be >= 1).
+     * @param cursor Opaque cursor from a prior [HistoryPage.nextCursor], or `null` for the first page.
+     * @param durableSessionId Optional verbatim session filter bound into the returned cursor.
+     * @param direction Traversal order ([HistoryPageDirection.FORWARD] or [HistoryPageDirection.BACKWARD]).
+     * @param includeStreamed When `false` (default), includes only [HistoryEntrySource.CANONICAL_HISTORY]
+     *   entries; when `true`, also includes live [HistoryEntrySource.STREAMED] entries.
+     * @throws IllegalArgumentException if [pageSize] < 1 or [durableSessionId] is blank.
+     * @throws InvalidHistoryCursorException if [cursor] is invalid, tampered, mismatched, or stale.
+     */
+    fun readPage(
+        pageSize: Int = DEFAULT_PAGE_SIZE,
+        cursor: String? = null,
+        durableSessionId: String? = null,
+        direction: HistoryPageDirection = HistoryPageDirection.FORWARD,
+        includeStreamed: Boolean = false,
+    ): HistoryPage {
+        checkIntBounds(pageSize.toLong(), min = 1L, max = Int.MAX_VALUE.toLong())
+        durableSessionId?.let { ensureIdNotNormalized(it) }
+
+        val anchorIdentity = cursor?.let {
+            HistoryCursorCodec.decode(
+                cursor = it,
+                expectedDirection = direction,
+                expectedSessionId = durableSessionId,
+                expectedIncludeStreamed = includeStreamed,
+            )
+        }
+
+        return lock.readLock().withLock {
+            val snapshot = filteredSnapshotLocked(durableSessionId, includeStreamed)
+            val anchorIndex = anchorIdentity?.let { anchor ->
+                resolveAnchorIndexLocked(snapshot, anchor)
+            }
+            val (pageItems, nextAnchor) = sliceSnapshot(snapshot, pageSize, anchorIndex, direction)
+            val nextCursor = nextAnchor?.let { anchor ->
+                HistoryCursorCodec.encode(anchor, direction, durableSessionId, includeStreamed)
+            }
+            HistoryPage(
+                entries = pageItems.map { it.second },
+                cursor = cursor,
+                nextCursor = nextCursor,
+                hasMore = nextCursor != null,
+            )
+        }
+    }
+
+    private fun filteredSnapshotLocked(
+        durableSessionId: String?,
+        includeStreamed: Boolean,
+    ): List<Pair<HistoryEntryIdentity, CanonicalHistoryEntry>> {
+        return orderedIdentities.mapNotNull { id ->
+            val entry = entriesByIdentity[id]
+            val matchesSource = includeStreamed || entry?.source == HistoryEntrySource.CANONICAL_HISTORY
+            val matchesSession = durableSessionId == null || entry?.durableSessionId == durableSessionId
+            if (entry != null && matchesSource && matchesSession) id to entry else null
+        }
+    }
+
+    private fun resolveAnchorIndexLocked(
+        snapshot: List<Pair<HistoryEntryIdentity, CanonicalHistoryEntry>>,
+        anchor: HistoryEntryIdentity,
+    ): Int {
+        val resolved = identityAliases[anchor] ?: anchor
+        val idx = snapshot.indexOfFirst { (id, _) -> id == resolved }
+        if (idx < 0) {
+            throw InvalidHistoryCursorException("History cursor anchor entry was not found")
+        }
+        return idx
+    }
+
+    private fun sliceSnapshot(
+        snapshot: List<Pair<HistoryEntryIdentity, CanonicalHistoryEntry>>,
+        pageSize: Int,
+        anchorIndex: Int?,
+        direction: HistoryPageDirection,
+    ): Pair<List<Pair<HistoryEntryIdentity, CanonicalHistoryEntry>>, HistoryEntryIdentity?> {
+        return when (direction) {
+            HistoryPageDirection.FORWARD -> {
+                val start = anchorIndex?.plus(1) ?: 0
+                val end = minOf(start.toLong() + pageSize.toLong(), snapshot.size.toLong()).toInt()
+                val items = if (start < snapshot.size) snapshot.subList(start, end) else emptyList()
+                val anchor = if (end < snapshot.size && items.isNotEmpty()) items.last().first else null
+                items to anchor
+            }
+            HistoryPageDirection.BACKWARD -> {
+                val end = anchorIndex ?: snapshot.size
+                val start = maxOf(0L, end.toLong() - pageSize.toLong()).toInt()
+                val items = if (end > 0) snapshot.subList(start, end) else emptyList()
+                val anchor = if (start > 0 && items.isNotEmpty()) items.first().first else null
+                items to anchor
+            }
+        }
+    }
 
     /**
      * Ingests a [HistoryPage] of canonical entries into the reader, deduplicating by stable
@@ -316,11 +452,14 @@ class HistoryReader {
     }
 
     companion object {
-        private const val HASH_ALGORITHM = "SHA-256"
+        /** Default page size used by [readPage] when the caller does not specify one. */
+        const val DEFAULT_PAGE_SIZE: Int = 50
+
+        internal const val HASH_ALGORITHM = "SHA-256"
         private const val DOMAIN_SEPARATOR = "droidhelp.history.identity.v1"
-        private const val KEY_PREFIX = "v1:key:"
-        private const val SEQUENCE_PREFIX = "v1:seq:"
-        private const val CONTENT_HASH_PREFIX = "v1:hash:"
+        internal const val KEY_PREFIX = "v1:key:"
+        internal const val SEQUENCE_PREFIX = "v1:seq:"
+        internal const val CONTENT_HASH_PREFIX = "v1:hash:"
         private const val PRESENCE_NULL: Byte = 0
         private const val PRESENCE_PRESENT: Byte = 1
 
@@ -397,7 +536,7 @@ class HistoryReader {
             }
         }
 
-        private fun MessageDigest.updateField(value: String?) {
+        internal fun MessageDigest.updateField(value: String?) {
             if (value == null) {
                 update(PRESENCE_NULL)
                 return
@@ -406,6 +545,172 @@ class HistoryReader {
             val bytes = value.toByteArray(Charsets.UTF_8)
             update(ByteBuffer.allocate(Int.SIZE_BYTES).putInt(bytes.size).array())
             update(bytes)
+        }
+    }
+}
+
+private object HistoryCursorCodec {
+    private const val CURSOR_VERSION_1: Byte = 1
+    private const val SCOPE_DOMAIN = "droidhelp.history.cursor.scope.v1"
+    private const val CHECKSUM_DOMAIN = "droidhelp.history.cursor.checksum.v1"
+    private const val FLAG_BACKWARD: Int = 1 shl 0
+    private const val FLAG_INCLUDE_STREAMED: Int = 1 shl 1
+    private const val FLAG_HAS_SESSION_SCOPE: Int = 1 shl 2
+    private const val KNOWN_FLAGS_MASK: Int = FLAG_BACKWARD or FLAG_INCLUDE_STREAMED or FLAG_HAS_SESSION_SCOPE
+    private const val RESERVED_FLAGS_MASK: Int = KNOWN_FLAGS_MASK.inv()
+    private const val SCHEME_IMMUTABLE_KEY: Byte = 0
+    private const val SCHEME_POSITIONED_HASH: Byte = 1
+    private const val SCHEME_CONTENT_HASH: Byte = 2
+    private const val SCOPE_DIGEST_BYTES: Int = 16
+    private const val IDENTITY_DIGEST_BYTES: Int = 32
+    private const val CHECKSUM_BYTES: Int = 16
+    private const val PAYLOAD_BYTES: Int = 1 + 1 + SCOPE_DIGEST_BYTES + 1 + IDENTITY_DIGEST_BYTES
+    private const val TOTAL_BYTES: Int = PAYLOAD_BYTES + CHECKSUM_BYTES
+    private const val HEX_RADIX: Int = 16
+    private const val HEX_NIBBLE_SHIFT: Int = 4
+    private const val BYTE_MASK: Int = 0xFF
+
+    private val urlEncoder: Base64.Encoder = Base64.getUrlEncoder().withoutPadding()
+    private val urlDecoder: Base64.Decoder = Base64.getUrlDecoder()
+
+    fun encode(
+        anchor: HistoryEntryIdentity,
+        direction: HistoryPageDirection,
+        durableSessionId: String?,
+        includeStreamed: Boolean,
+    ): String {
+        val flags = (if (direction == HistoryPageDirection.BACKWARD) FLAG_BACKWARD else 0) or
+            (if (includeStreamed) FLAG_INCLUDE_STREAMED else 0) or
+            (if (durableSessionId != null) FLAG_HAS_SESSION_SCOPE else 0)
+
+        val (schemeByte, prefix) = when (anchor.scheme) {
+            HistoryEntryIdentityScheme.IMMUTABLE_KEY -> SCHEME_IMMUTABLE_KEY to HistoryReader.KEY_PREFIX
+            HistoryEntryIdentityScheme.POSITIONED_CONTENT_HASH ->
+                SCHEME_POSITIONED_HASH to HistoryReader.SEQUENCE_PREFIX
+            HistoryEntryIdentityScheme.CONTENT_HASH -> SCHEME_CONTENT_HASH to HistoryReader.CONTENT_HASH_PREFIX
+        }
+        val hex = anchor.value.removePrefix(prefix)
+        require(anchor.value.startsWith(prefix) && hex.length == IDENTITY_DIGEST_BYTES * 2) {
+            "Anchor identity does not match expected digest format"
+        }
+
+        val identityDigest = ByteArray(IDENTITY_DIGEST_BYTES) { index ->
+            val hi = Character.digit(hex[index * 2], HEX_RADIX)
+            val lo = Character.digit(hex[index * 2 + 1], HEX_RADIX)
+            require(hi >= 0 && lo >= 0) { "Anchor identity digest contains non-hex characters" }
+            ((hi shl HEX_NIBBLE_SHIFT) or lo).toByte()
+        }
+
+        val payload = ByteBuffer.allocate(PAYLOAD_BYTES)
+            .put(CURSOR_VERSION_1)
+            .put(flags.toByte())
+            .put(scopeDigest(durableSessionId))
+            .put(schemeByte)
+            .put(identityDigest)
+            .array()
+
+        val full = ByteBuffer.allocate(TOTAL_BYTES)
+            .put(payload)
+            .put(checksum(payload))
+            .array()
+
+        return urlEncoder.encodeToString(full)
+    }
+
+    fun decode(
+        cursor: String,
+        expectedDirection: HistoryPageDirection,
+        expectedSessionId: String?,
+        expectedIncludeStreamed: Boolean,
+    ): HistoryEntryIdentity {
+        ensureValid(cursor.isNotBlank() && !cursor.contains('=')) {
+            "History cursor must be a non-empty opaque token"
+        }
+        val raw = try {
+            urlDecoder.decode(cursor)
+        } catch (e: IllegalArgumentException) {
+            throw InvalidHistoryCursorException("Malformed history cursor encoding", e)
+        }
+        ensureValid(raw.size == TOTAL_BYTES && urlEncoder.encodeToString(raw) == cursor) {
+            "Malformed or non-canonical history cursor"
+        }
+
+        val payload = raw.copyOfRange(0, PAYLOAD_BYTES)
+        val actualChecksum = raw.copyOfRange(PAYLOAD_BYTES, TOTAL_BYTES)
+        ensureValid(MessageDigest.isEqual(checksum(payload), actualChecksum)) {
+            "History cursor failed integrity verification"
+        }
+
+        val buffer = ByteBuffer.wrap(payload)
+        val version = buffer.get()
+        ensureValid(version == CURSOR_VERSION_1) { "Unsupported history cursor version: $version" }
+
+        val flags = buffer.get().toInt() and BYTE_MASK
+        ensureValid((flags and RESERVED_FLAGS_MASK) == 0) { "History cursor contains unsupported flags" }
+
+        val cursorDirection = if ((flags and FLAG_BACKWARD) != 0) {
+            HistoryPageDirection.BACKWARD
+        } else {
+            HistoryPageDirection.FORWARD
+        }
+        val cursorIncludeStreamed = (flags and FLAG_INCLUDE_STREAMED) != 0
+        val cursorHasSessionScope = (flags and FLAG_HAS_SESSION_SCOPE) != 0
+
+        ensureValid(cursorDirection == expectedDirection) {
+            "History cursor direction ($cursorDirection) does not match requested direction ($expectedDirection)"
+        }
+        ensureValid(cursorIncludeStreamed == expectedIncludeStreamed) {
+            "History cursor streamed-entry scope does not match request"
+        }
+        ensureValid(cursorHasSessionScope == (expectedSessionId != null)) {
+            "History cursor session scope does not match request"
+        }
+
+        val actualScopeDigest = ByteArray(SCOPE_DIGEST_BYTES)
+        buffer.get(actualScopeDigest)
+        ensureValid(MessageDigest.isEqual(scopeDigest(expectedSessionId), actualScopeDigest)) {
+            "History cursor does not belong to the requested session"
+        }
+
+        val schemeByte = buffer.get()
+        val identityDigest = ByteArray(IDENTITY_DIGEST_BYTES)
+        buffer.get(identityDigest)
+
+        val (scheme, prefix) = when (schemeByte) {
+            SCHEME_IMMUTABLE_KEY -> HistoryEntryIdentityScheme.IMMUTABLE_KEY to HistoryReader.KEY_PREFIX
+            SCHEME_POSITIONED_HASH ->
+                HistoryEntryIdentityScheme.POSITIONED_CONTENT_HASH to HistoryReader.SEQUENCE_PREFIX
+            SCHEME_CONTENT_HASH -> HistoryEntryIdentityScheme.CONTENT_HASH to HistoryReader.CONTENT_HASH_PREFIX
+            else -> throw InvalidHistoryCursorException("Unsupported history cursor identity scheme: $schemeByte")
+        }
+
+        val hex = identityDigest.joinToString(separator = "") { byte ->
+            "%02x".format(Locale.US, byte)
+        }
+        return HistoryEntryIdentity(value = "$prefix$hex", scheme = scheme)
+    }
+
+    private fun scopeDigest(durableSessionId: String?): ByteArray {
+        val md = MessageDigest.getInstance(HistoryReader.HASH_ALGORITHM)
+        with(HistoryReader) {
+            md.updateField(SCOPE_DOMAIN)
+            md.updateField(durableSessionId)
+        }
+        return md.digest().copyOf(SCOPE_DIGEST_BYTES)
+    }
+
+    private fun checksum(payload: ByteArray): ByteArray {
+        val md = MessageDigest.getInstance(HistoryReader.HASH_ALGORITHM)
+        with(HistoryReader) {
+            md.updateField(CHECKSUM_DOMAIN)
+        }
+        md.update(payload)
+        return md.digest().copyOf(CHECKSUM_BYTES)
+    }
+
+    private fun ensureValid(condition: Boolean, message: () -> String) {
+        if (!condition) {
+            throw InvalidHistoryCursorException(message())
         }
     }
 }
