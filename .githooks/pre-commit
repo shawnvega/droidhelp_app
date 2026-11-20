@@ -13,7 +13,15 @@ fi
 
 echo "Running pre-commit checks..."
 
-echo "Step 1/2: Running Android Lint (./gradlew lintDebug)..."
+echo "Step 1/3: Running Detekt (./gradlew detekt)..."
+./gradlew detekt
+DETEKT_EXIT=$?
+if [ "$DETEKT_EXIT" -ne 0 ]; then
+    echo "Pre-commit hook failed: './gradlew detekt' exited with status $DETEKT_EXIT. Commit aborted." >&2
+    exit "$DETEKT_EXIT"
+fi
+
+echo "Step 2/3: Running Android Lint (./gradlew lintDebug)..."
 ./gradlew lintDebug
 LINT_EXIT=$?
 if [ "$LINT_EXIT" -ne 0 ]; then
@@ -21,7 +29,7 @@ if [ "$LINT_EXIT" -ne 0 ]; then
     exit "$LINT_EXIT"
 fi
 
-echo "Step 2/2: Running unit tests (./gradlew test)..."
+echo "Step 3/3: Running unit tests (./gradlew test)..."
 ./gradlew test
 TEST_EXIT=$?
 if [ "$TEST_EXIT" -ne 0 ]; then
