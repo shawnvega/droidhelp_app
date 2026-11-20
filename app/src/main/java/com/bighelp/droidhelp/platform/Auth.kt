@@ -1,5 +1,7 @@
 package com.bighelp.droidhelp.platform
 
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
@@ -17,6 +19,9 @@ import java.util.Base64
  * securely rather than in plain preferences.
  */
 class Auth(private val secureStorage: SecureStorage) {
+    private val mutex = Mutex()
+    private val secureRandom = SecureRandom()
+
     companion object {
         private const val VERIFIER_KEY = "pkce_code_verifier"
         private const val STATE_KEY = "oauth_state"
@@ -33,6 +38,14 @@ class Auth(private val secureStorage: SecureStorage) {
         /** Upper bound on retained digests so the registry cannot grow forever. */
         private const val MAX_CONSUMED_TOKENS = 64
 
+        /** 32 random bytes encode to 43 base64url characters (256 bits of entropy, RFC 7636). */
+        private const val VERIFIER_BYTE_LENGTH = 32
+
+        /** 16 random bytes provide 128 bits of entropy for CSRF state tokens. */
+        private const val STATE_BYTE_LENGTH = 16
+
+        private const val NIBBLE_SHIFT = 4
+        private const val NIBBLE_MASK = 0x0F
         private const val HEX_CHARS = "0123456789abcdef"
     }
 
@@ -41,13 +54,13 @@ class Auth(private val secureStorage: SecureStorage) {
      * 
      * @return The [code_verifier] string.
      */
-    suspend fun getOrCreateVerifier(): String {
+    suspend fun getOrCreateVerifier(): String = mutex.withLock {
         val existing = secureStorage.getString(VERIFIER_KEY)
-        if (existing != null) return existing
+        if (existing != null) return@withLock existing
 
         val newVerifier = generateCodeVerifier()
         secureStorage.saveString(VERIFIER_KEY, newVerifier)
-        return newVerifier
+        newVerifier
     }
 
     /**
@@ -57,9 +70,8 @@ class Auth(private val secureStorage: SecureStorage) {
      * @return A high-entropy [code_verifier] string.
      */
     fun generateCodeVerifier(): String {
-        // Target ~32 bytes to get ~43 chars in base64url
-        val bytes = ByteArray(32)
-        SecureRandom().nextBytes(bytes)
+        val bytes = ByteArray(VERIFIER_BYTE_LENGTH)
+        secureRandom.nextBytes(bytes)
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
     }
 
@@ -70,6 +82,7 @@ class Auth(private val secureStorage: SecureStorage) {
      * @return The derived [code_challenge] string.
      */
     fun generateCodeChallenge(verifier: String): String {
+        require(verifier.isNotBlank()) { "Code verifier must not be blank" }
         val digest = MessageDigest.getInstance("SHA-256")
         val hash = digest.digest(verifier.toByteArray(Charsets.UTF_8))
         return Base64.getUrlEncoder().withoutPadding().encodeToString(hash)
@@ -78,7 +91,7 @@ class Auth(private val secureStorage: SecureStorage) {
     /**
      * Removes the stored [code_verifier] from [secureStorage].
      */
-    suspend fun clearVerifier() {
+    suspend fun clearVerifier() = mutex.withLock {
         secureStorage.delete(VERIFIER_KEY)
     }
 
@@ -89,29 +102,32 @@ class Auth(private val secureStorage: SecureStorage) {
      *
      * @return The generated [state] string.
      */
-    suspend fun generateAndSaveState(): String {
-        val bytes = ByteArray(16) // 128 bits
-        SecureRandom().nextBytes(bytes)
+    suspend fun generateAndSaveState(): String = mutex.withLock {
+        val bytes = ByteArray(STATE_BYTE_LENGTH)
+        secureRandom.nextBytes(bytes)
         val state = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
         secureStorage.saveString(STATE_KEY, state)
-        return state
+        state
     }
 
     /**
-     * Validates the provided [receivedState] against the stored state.
-     * If they match, the stored state is cleared and true is returned.
-     * This prevents CSRF attacks by ensuring the response matches the request.
+     * Validates the provided [receivedState] against the stored state using a
+     * constant-time comparison. If they match, the stored state is cleared and
+     * true is returned. This prevents CSRF attacks and replay by ensuring the
+     * response matches the request and can only be validated once.
      *
      * @param receivedState The state token received from the OAuth callback.
      * @return True if the state matches and was successfully validated, false otherwise.
      */
-    suspend fun validateAndClearState(receivedState: String): Boolean {
+    suspend fun validateAndClearState(receivedState: String): Boolean = mutex.withLock {
+        if (receivedState.isBlank()) return@withLock false
         val storedState = secureStorage.getString(STATE_KEY)
-        if (storedState != null && storedState == receivedState) {
+        if (storedState != null && constantTimeEquals(storedState, receivedState)) {
             secureStorage.delete(STATE_KEY)
-            return true
+            true
+        } else {
+            false
         }
-        return false
     }
 
     /**
@@ -120,7 +136,7 @@ class Auth(private val secureStorage: SecureStorage) {
      * @param accessToken The new access token.
      * @param refreshToken The new refresh token.
      */
-    suspend fun saveTokens(accessToken: String, refreshToken: String) {
+    suspend fun saveTokens(accessToken: String, refreshToken: String) = mutex.withLock {
         secureStorage.saveString(ACCESS_TOKEN_KEY, accessToken)
         secureStorage.saveString(REFRESH_TOKEN_KEY, refreshToken)
     }
@@ -130,14 +146,18 @@ class Auth(private val secureStorage: SecureStorage) {
      * 
      * @return The access token, or null if not stored.
      */
-    suspend fun getAccessToken(): String? = secureStorage.getString(ACCESS_TOKEN_KEY)
+    suspend fun getAccessToken(): String? = mutex.withLock {
+        secureStorage.getString(ACCESS_TOKEN_KEY)
+    }
 
     /**
      * Retrieves the current refresh token.
      * 
      * @return The refresh token, or null if not stored.
      */
-    suspend fun getRefreshToken(): String? = secureStorage.getString(REFRESH_TOKEN_KEY)
+    suspend fun getRefreshToken(): String? = mutex.withLock {
+        secureStorage.getString(REFRESH_TOKEN_KEY)
+    }
 
     /**
      * Clears all stored tokens.
@@ -146,7 +166,7 @@ class Auth(private val secureStorage: SecureStorage) {
      * only digests and keeping it means a token that was already rotated away is
      * still recognised as reused after a sign-out/sign-in cycle.
      */
-    suspend fun clearTokens() {
+    suspend fun clearTokens() = mutex.withLock {
         secureStorage.delete(ACCESS_TOKEN_KEY)
         secureStorage.delete(REFRESH_TOKEN_KEY)
     }
@@ -159,9 +179,10 @@ class Auth(private val secureStorage: SecureStorage) {
      * This method therefore:
      *
      *  1. Rejects [oldRefreshToken] outright if it was already consumed (explicit
-     *     reuse detection).
-     *  2. Performs a compare-and-swap against the currently stored refresh token.
-     *     If a different token is already stored, the presented one has been
+     *     reuse detection), and rejects [newRefreshToken] if it matches an already
+     *     consumed token.
+     *  2. Performs an atomic compare-and-swap against the currently stored refresh
+     *     token. If a different token is already stored, the presented one has been
      *     rotated away by another caller and is treated as reuse.
      *  3. Persists the new pair through [SecureStorage] and records the old token
      *     as consumed.
@@ -172,28 +193,37 @@ class Auth(private val secureStorage: SecureStorage) {
      * @throws TokenReuseException if a reuse attempt is detected.
      */
     suspend fun rotateTokens(oldRefreshToken: String, newAccessToken: String, newRefreshToken: String) {
-        val oldDigest = digest(oldRefreshToken)
+        require(oldRefreshToken.isNotBlank()) { "Old refresh token must not be blank" }
+        require(newAccessToken.isNotBlank()) { "New access token must not be blank" }
+        require(newRefreshToken.isNotBlank()) { "New refresh token must not be blank" }
 
-        // 1. Explicit reuse detection: this exact token was already exchanged.
-        if (isConsumed(oldDigest)) {
-            throw TokenReuseException("Refresh token reuse detected!")
-        }
+        mutex.withLock {
+            val oldDigest = digest(oldRefreshToken)
+            val consumedDigests = loadConsumedDigests()
+            val isSameToken = constantTimeEquals(newRefreshToken, oldRefreshToken)
 
-        // 2. Compare-and-swap: the presented token must be the one we currently hold.
-        //    A different stored token means ours was already rotated away elsewhere.
-        val current = secureStorage.getString(REFRESH_TOKEN_KEY)
-        if (current != null && current != oldRefreshToken) {
-            throw TokenReuseException("Refresh token reuse detected!")
-        }
+            // 1. Explicit reuse detection: reject if the presented token was already
+            //    exchanged or if the replacement token was previously consumed.
+            // 2. Compare-and-swap: the presented token must be the one we currently hold.
+            //    A different stored token means ours was already rotated away elsewhere.
+            val current = secureStorage.getString(REFRESH_TOKEN_KEY)
+            val isReuseDetected = consumedDigests.contains(oldDigest) ||
+                (current != null && !constantTimeEquals(current, oldRefreshToken)) ||
+                (!isSameToken && consumedDigests.contains(digest(newRefreshToken)))
 
-        // 3. Persist the new pair, then retire the old token.
-        secureStorage.saveString(ACCESS_TOKEN_KEY, newAccessToken)
-        secureStorage.saveString(REFRESH_TOKEN_KEY, newRefreshToken)
+            if (isReuseDetected) {
+                throw TokenReuseException("Refresh token reuse detected!")
+            }
 
-        // A non-rotating server may hand back the same token; only retire it when
-        // the value actually changed, otherwise we would lock ourselves out.
-        if (newRefreshToken != oldRefreshToken) {
-            markConsumed(oldDigest)
+            // 3. Persist the new pair, then retire the old token.
+            secureStorage.saveString(ACCESS_TOKEN_KEY, newAccessToken)
+            secureStorage.saveString(REFRESH_TOKEN_KEY, newRefreshToken)
+
+            // A non-rotating server may hand back the same token; only retire it when
+            // the value actually changed, otherwise we would lock ourselves out.
+            if (!isSameToken) {
+                markConsumed(oldDigest, consumedDigests)
+            }
         }
     }
 
@@ -201,14 +231,12 @@ class Auth(private val secureStorage: SecureStorage) {
      * Returns true if [refreshToken] has already been exchanged via [rotateTokens]
      * and must therefore be rejected as reused.
      */
-    suspend fun isRefreshTokenConsumed(refreshToken: String): Boolean =
-        isConsumed(digest(refreshToken))
+    suspend fun isRefreshTokenConsumed(refreshToken: String): Boolean = mutex.withLock {
+        loadConsumedDigests().contains(digest(refreshToken))
+    }
 
-    private suspend fun isConsumed(digest: String): Boolean =
-        loadConsumedDigests().contains(digest)
-
-    private suspend fun markConsumed(digest: String) {
-        val digests = loadConsumedDigests().toMutableList()
+    private suspend fun markConsumed(digest: String, existingDigests: List<String>) {
+        val digests = existingDigests.toMutableList()
         if (!digests.contains(digest)) {
             digests.add(digest)
         }
@@ -226,12 +254,18 @@ class Auth(private val secureStorage: SecureStorage) {
         return raw.split('\n').filter { it.isNotBlank() }
     }
 
+    private fun constantTimeEquals(first: String, second: String): Boolean =
+        MessageDigest.isEqual(
+            first.toByteArray(Charsets.UTF_8),
+            second.toByteArray(Charsets.UTF_8)
+        )
+
     private fun digest(value: String): String {
         val hash = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
         val builder = StringBuilder(hash.size * 2)
         for (byte in hash) {
-            builder.append(HEX_CHARS[(byte.toInt() shr 4) and 0x0F])
-            builder.append(HEX_CHARS[byte.toInt() and 0x0F])
+            builder.append(HEX_CHARS[(byte.toInt() shr NIBBLE_SHIFT) and NIBBLE_MASK])
+            builder.append(HEX_CHARS[byte.toInt() and NIBBLE_MASK])
         }
         return builder.toString()
     }
