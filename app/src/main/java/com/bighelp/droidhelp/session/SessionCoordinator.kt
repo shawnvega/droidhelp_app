@@ -5,15 +5,6 @@ import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 
 /**
- * Represents a user session.
- */
-data class Session(
-    val id: String,
-    val source: String,
-    val profile: String
-)
-
-/**
  * Interface for persisting and retrieving sessions.
  *
  * Kept deliberately small (suspend [save] / [findById]) so the coordinator can be unit-tested
@@ -133,6 +124,9 @@ class SessionCoordinator(private val repository: SessionRepository) {
     private fun validateRuntime(session: Session): List<String> {
         val errors = mutableListOf<String>()
         if (session.id.isBlank()) errors.add("Runtime validation: id must not be blank")
+        if (session.runtimeSessionId != null && session.runtimeSessionId.isBlank()) {
+            errors.add("Runtime validation: runtimeSessionId must not be blank")
+        }
         if (session.source != SOURCE) errors.add("Runtime validation: source must be '$SOURCE'")
         if (session.profile.isBlank()) errors.add("Runtime validation: profile must not be blank")
         return errors
@@ -143,8 +137,10 @@ class SessionCoordinator(private val repository: SessionRepository) {
      */
     private fun validateStored(session: Session, requestedId: String): List<String> {
         val errors = mutableListOf<String>()
-        if (session.id != requestedId) {
-            errors.add("Stored validation: ID mismatch (expected '$requestedId', got '${session.id}')")
+        if (session.durableSessionId != requestedId) {
+            errors.add(
+                "Stored validation: ID mismatch (expected '$requestedId', got '${session.durableSessionId}')"
+            )
         }
         if (session.source.isBlank()) errors.add("Stored validation: source field missing")
         if (session.profile.isBlank()) errors.add("Stored validation: profile field missing")
