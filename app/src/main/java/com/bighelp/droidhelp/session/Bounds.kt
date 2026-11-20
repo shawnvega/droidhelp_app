@@ -6,6 +6,8 @@
  *   measuring encoded UTF-8 byte size rather than UTF-16 code unit count.
  * - **Inclusive integer range bounds** via [checkIntBounds], accepting 64-bit [Long] values and defaulting to the
  *   signed 32-bit [Int] range (`[Int.MIN_VALUE, Int.MAX_VALUE]`).
+ * - **Verbatim identifier preservation** via [ensureIdNotNormalized], validating that an identifier is non-empty and
+ *   non-blank while returning it unchanged without case-folding, trimming, or Unicode normalization.
  *
  * All validation failures throw [IllegalArgumentException] with descriptive diagnostic messages.
  */
@@ -79,4 +81,26 @@ fun checkIntBounds(
     require(value >= min && value <= max) {
         "Value $value is out of integer bounds [$min, $max]"
     }
+}
+
+/**
+ * Validates that [id] is a valid non-empty, non-blank identifier and returns it verbatim without
+ * normalization.
+ *
+ * ### Validation Rules
+ * - **Verbatim preservation**: Returns [id] unchanged — no case-folding (uppercase/lowercase letters
+ *   remain intact), no trimming of leading or trailing whitespace, and no Unicode canonicalization
+ *   (NFC/NFD forms are preserved as provided).
+ * - **Non-empty / non-blank check**: Rejects empty (`""`) and whitespace-only strings, matching the
+ *   session identifier contract in [SessionCoordinator].
+ *
+ * @param id The identifier string to validate.
+ * @return [id] verbatim without modification.
+ * @throws IllegalArgumentException if [id] is empty or blank (contains only whitespace).
+ */
+fun ensureIdNotNormalized(id: String): String {
+    require(id.isNotBlank()) {
+        "ID must not be empty or blank"
+    }
+    return id
 }

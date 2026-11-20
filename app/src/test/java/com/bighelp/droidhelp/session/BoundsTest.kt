@@ -2,6 +2,7 @@ package com.bighelp.droidhelp.session
 
 import org.junit.jupiter.api.Assertions.assertDoesNotThrow
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Nested
@@ -331,6 +332,62 @@ class BoundsTest {
             }
             assertThrows(IllegalArgumentException::class.java) {
                 checkIntBounds(0L, max = Int.MIN_VALUE.toLong() - 1L)
+            }
+        }
+    }
+
+    @Nested
+    inner class EnsureIdNotNormalizedTests {
+
+        @Test
+        fun `preserves mixed case without case folding`() {
+            assertEquals("CaseSensitive-ID", ensureIdNotNormalized("CaseSensitive-ID"))
+            assertEquals("UPPERCASE_ID", ensureIdNotNormalized("UPPERCASE_ID"))
+            assertEquals("lowercase_id", ensureIdNotNormalized("lowercase_id"))
+            assertNotEquals(
+                ensureIdNotNormalized("Session-ABC"),
+                ensureIdNotNormalized("session-abc"),
+            )
+        }
+
+        @Test
+        fun `preserves leading trailing and internal whitespace without trimming`() {
+            assertEquals("  padded-id  ", ensureIdNotNormalized("  padded-id  "))
+            assertEquals("\tleading-tab", ensureIdNotNormalized("\tleading-tab"))
+            assertEquals("trailing-newline\n", ensureIdNotNormalized("trailing-newline\n"))
+            assertEquals("  mixed  spaces  ", ensureIdNotNormalized("  mixed  spaces  "))
+        }
+
+        @Test
+        fun `preserves special characters and unicode forms verbatim without normalization`() {
+            val unusual = "AbC-123_XyZ.!@#%^&*()[]{}|;:'\",./<>?-"
+            assertEquals(unusual, ensureIdNotNormalized(unusual))
+
+            val nfc = "caf\u00e9"
+            val nfd = "cafe\u0301"
+            assertEquals(nfc, ensureIdNotNormalized(nfc))
+            assertEquals(nfd, ensureIdNotNormalized(nfd))
+            assertNotEquals(ensureIdNotNormalized(nfc), ensureIdNotNormalized(nfd))
+
+            assertEquals("00123", ensureIdNotNormalized("00123"))
+            assertEquals("a/b//c", ensureIdNotNormalized("a/b//c"))
+        }
+
+        @Test
+        fun `throws when id is empty or blank`() {
+            val emptyException = assertThrows(IllegalArgumentException::class.java) {
+                ensureIdNotNormalized("")
+            }
+            assertTrue(emptyException.message.orEmpty().isNotBlank())
+
+            assertThrows(IllegalArgumentException::class.java) {
+                ensureIdNotNormalized(" ")
+            }
+            assertThrows(IllegalArgumentException::class.java) {
+                ensureIdNotNormalized("   ")
+            }
+            assertThrows(IllegalArgumentException::class.java) {
+                ensureIdNotNormalized("\t\r\n")
             }
         }
     }
