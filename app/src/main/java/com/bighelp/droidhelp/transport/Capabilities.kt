@@ -33,13 +33,19 @@ class CapabilitiesRegistry {
      * @property owner The optional owner of this capability. When the owner is retired
      * via [retireOwner], all capabilities registered under that owner are removed.
      */
-    data class CapabilityEntry(val value: String?, val context: String?, val owner: String? = null)
+    data class CapabilityEntry(
+        val value: String? = null,
+        val context: String? = null,
+        val owner: String? = null
+    )
 
     /**
      * Thrown when a capability lookup fails because the key is unknown or its
      * owning owner has been retired.
+     *
+     * @property key The capability key that could not be resolved.
      */
-    class CapabilityNotFoundError(key: String) : IllegalStateException("Capability not found: $key")
+    class CapabilityNotFoundError(val key: String) : IllegalStateException("Capability not found: $key")
 
     /**
      * Registers a capability under [key], replacing any previous value.
@@ -91,11 +97,33 @@ class CapabilitiesRegistry {
     }
 
     /**
+     * Returns whether a capability is currently registered under [key],
+     * including capabilities registered with a null value.
+     */
+    fun contains(key: String): Boolean {
+        return lock.readLock().withLock {
+            capabilities.containsKey(key)
+        }
+    }
+
+    /**
+     * Atomically looks up the full [CapabilityEntry] (value, context, and owner)
+     * registered under [key].
+     *
+     * @return The [CapabilityEntry], or null when the key is unknown.
+     */
+    fun lookupEntry(key: String): CapabilityEntry? {
+        return lock.readLock().withLock {
+            capabilities[key]
+        }
+    }
+
+    /**
      * Looks up the capability registered under [key], throwing [CapabilityNotFoundError]
-     * when the key is unknown.
+     * when the key is unknown, its owner has been retired, or its registered value is null.
      *
      * @return The capability value.
-     * @throws CapabilityNotFoundError when no capability is registered under [key].
+     * @throws CapabilityNotFoundError when no non-null capability value is registered under [key].
      */
     fun lookupOrThrow(key: String): String {
         return lock.readLock().withLock {
@@ -141,9 +169,15 @@ class CapabilitiesRegistry {
      */
     fun retireOwner(owner: String): Int {
         return lock.writeLock().withLock {
-            val removed = capabilities.filter { it.value.owner == owner }.keys
-            removed.forEach { capabilities.remove(it) }
-            removed.size
+            var removedCount = 0
+            val iterator = capabilities.entries.iterator()
+            while (iterator.hasNext()) {
+                if (iterator.next().value.owner == owner) {
+                    iterator.remove()
+                    removedCount++
+                }
+            }
+            removedCount
         }
     }
 
