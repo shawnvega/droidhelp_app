@@ -1,11 +1,15 @@
 package com.bighelp.droidhelp.transport
 
+import com.bighelp.droidhelp.platform.FileBasedVersionedDatabase
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+import java.io.File
 
 class EndpointTest {
 
@@ -161,19 +165,9 @@ class EndpointTest {
     @Test
     fun `requireTls returns false for http and ws on localhost and private suffixes`() {
         val privateHosts = listOf(
-            "localhost",
-            "hermes.localhost",
-            "hermes",
-            "hermes.local",
-            "hermes.lan",
-            "hermes.internal",
-            "nas.home.arpa",
-            "app.intranet",
-            "api.corp",
-            "box.localdomain",
-            "svc.private",
-            "hermes.tail1234.ts.net",
-            "hermes.beta.tailscale.net"
+            "localhost", "hermes.localhost", "hermes", "hermes.local", "hermes.lan", "hermes.internal",
+            "nas.home.arpa", "app.intranet", "api.corp", "box.localdomain", "svc.private",
+            "hermes.tail1234.ts.net", "hermes.beta.tailscale.net"
         )
         for (host in privateHosts) {
             assertFalse(requireTls(Endpoint.build(scheme = "http", host = host, path = "/")), "http://$host")
@@ -184,17 +178,8 @@ class EndpointTest {
     @Test
     fun `requireTls returns false for http on private and loopback IPv4 ranges`() {
         val privateIPv4s = listOf(
-            "127.0.0.1",
-            "127.255.255.254",
-            "10.0.0.1",
-            "10.8.0.5",
-            "172.16.0.1",
-            "172.31.255.254",
-            "192.168.1.1",
-            "192.168.1.20",
-            "100.64.0.1",
-            "100.127.255.254",
-            "169.254.0.1"
+            "127.0.0.1", "127.255.255.254", "10.0.0.1", "10.8.0.5", "172.16.0.1", "172.31.255.254",
+            "192.168.1.1", "192.168.1.20", "100.64.0.1", "100.127.255.254", "169.254.0.1"
         )
         for (ip in privateIPv4s) {
             assertFalse(requireTls(Endpoint.build(scheme = "http", host = ip, path = "/")), "http://$ip")
@@ -205,14 +190,8 @@ class EndpointTest {
     @Test
     fun `requireTls returns false for http on private and loopback IPv6 ranges`() {
         val privateIPv6s = listOf(
-            "::1",
-            "fe80::1",
-            "fd00::1",
-            "fc00::1",
-            "fd7a:115c:a1e0::1",
-            "::ffff:127.0.0.1",
-            "::ffff:10.0.0.1",
-            "::ffff:100.64.0.1"
+            "::1", "fe80::1", "fd00::1", "fc00::1", "fd7a:115c:a1e0::1",
+            "::ffff:127.0.0.1", "::ffff:10.0.0.1", "::ffff:100.64.0.1"
         )
         for (ip in privateIPv6s) {
             assertFalse(requireTls(Endpoint.build(scheme = "http", host = ip, path = "/")), "http://[$ip]")
@@ -223,23 +202,10 @@ class EndpointTest {
     @Test
     fun `requireTls returns true for http and ws on public IPs and hostnames`() {
         val publicHosts = listOf(
-            "8.8.8.8",
-            "192.0.2.1",
-            "11.0.0.1",
-            "172.15.255.255",
-            "172.32.0.1",
-            "100.63.255.255",
-            "100.128.0.1",
-            "2001:db8::1",
-            "::ffff:8.8.8.8",
-            "example.com",
-            "127.0.0.1.example.com",
-            "local.example.com",
-            "internal.com",
-            "hermes.lan.example.com",
-            "ts.net.example.com",
-            "example-ts.net",
-            "tailscale.net"
+            "8.8.8.8", "192.0.2.1", "11.0.0.1", "172.15.255.255", "172.32.0.1", "100.63.255.255",
+            "100.128.0.1", "2001:db8::1", "::ffff:8.8.8.8", "example.com", "127.0.0.1.example.com",
+            "local.example.com", "internal.com", "hermes.lan.example.com", "ts.net.example.com",
+            "example-ts.net", "tailscale.net"
         )
         for (host in publicHosts) {
             assertTrue(requireTls(Endpoint.build(scheme = "http", host = host, path = "/")), "http://$host")
@@ -284,14 +250,7 @@ class EndpointTest {
     @Test
     fun `isPrivateNetworkHost rejects numeric aliases, octal IPv4, and zone IDs`() {
         val rejected = listOf(
-            "",
-            "127.1",
-            "2130706433",
-            "0x7f000001",
-            "0177.0.0.1",
-            "fe80::1%eth0",
-            "1::2::3",
-            "1:2:3:4:5:6:7::8"
+            "", "127.1", "2130706433", "0x7f000001", "0177.0.0.1", "fe80::1%eth0", "1::2::3", "1:2:3:4:5:6:7::8"
         )
         for (host in rejected) {
             assertFalse(isPrivateNetworkHost(host), "expected false for '$host'")
@@ -316,36 +275,15 @@ class EndpointTest {
     @Test
     fun `fromString rejects invalid, malformed, and unsafe URLs`() {
         val invalidUrls = listOf(
-            "",
-            "   ",
-            "https://",
-            "http:///path",
-            "http:///api.example.com",
-            "http://example.com:abc/path",
-            "https://example.com:0",
-            "https://example.com:70000",
-            "https://example.com:/path",
-            "https://user:password@example.com",
-            "https://user@example.com",
-            "https://example.com?token=fixture",
-            "https://example.com/api?token=fixture",
-            "https://example.com#fragment",
-            "file:///tmp/host",
-            "ftp://example.com",
-            "https://example.com/a/../b",
-            "https://example.com/./a",
-            "https://example.com\\path",
-            "https://example.com/a|b",
-            "https://example.com/a b",
-            "http://[::1",
-            "http://[invalid]/path",
-            "http://[::1]extra/path",
-            "http://[1::2::3]/path",
-            "http://[fe80::1%eth0]/path",
-            "http://127.1/path",
-            "http://0x7f000001/path",
-            "http://0177.0.0.1/path",
-            "https://example.com/" + "a".repeat(2_050)
+            "", "   ", "https://", "http:///path", "http:///api.example.com", "http://example.com:abc/path",
+            "https://example.com:0", "https://example.com:70000", "https://example.com:/path",
+            "https://user:password@example.com", "https://user@example.com", "https://example.com?token=fixture",
+            "https://example.com/api?token=fixture", "https://example.com#fragment", "file:///tmp/host",
+            "ftp://example.com", "https://example.com/a/../b", "https://example.com/./a",
+            "https://example.com\\path", "https://example.com/a|b", "https://example.com/a b",
+            "http://[::1", "http://[invalid]/path", "http://[::1]extra/path", "http://[1::2::3]/path",
+            "http://[fe80::1%eth0]/path", "http://127.1/path", "http://0x7f000001/path",
+            "http://0177.0.0.1/path", "https://example.com/" + "a".repeat(2_050)
         )
         for (url in invalidUrls) {
             assertThrows(IllegalArgumentException::class.java, { Endpoint.fromString(url) }, "expected throw: $url")
@@ -354,29 +292,20 @@ class EndpointTest {
 
     @Test
     fun `build rejects invalid ports, prefixes, and paths`() {
-        assertThrows(IllegalArgumentException::class.java) {
-            Endpoint.build(scheme = "https", host = "example.com", port = 0)
+        for (badPort in listOf(0, 70_000)) {
+            assertThrows(IllegalArgumentException::class.java) {
+                Endpoint.build(scheme = "https", host = "example.com", port = badPort)
+            }
         }
-        assertThrows(IllegalArgumentException::class.java) {
-            Endpoint.build(scheme = "https", host = "example.com", port = 70_000)
+        for (badPrefix in listOf("v1/v2", "v1.0", "v1|v2", "localhost")) {
+            assertThrows(IllegalArgumentException::class.java) {
+                Endpoint.build(scheme = "https", host = "example.com", deploymentPrefix = badPrefix)
+            }
         }
-        assertThrows(IllegalArgumentException::class.java) {
-            Endpoint.build(scheme = "https", host = "example.com", deploymentPrefix = "v1/v2")
-        }
-        assertThrows(IllegalArgumentException::class.java) {
-            Endpoint.build(scheme = "https", host = "example.com", deploymentPrefix = "v1.0")
-        }
-        assertThrows(IllegalArgumentException::class.java) {
-            Endpoint.build(scheme = "https", host = "example.com", deploymentPrefix = "v1|v2")
-        }
-        assertThrows(IllegalArgumentException::class.java) {
-            Endpoint.build(scheme = "https", host = "example.com", deploymentPrefix = "localhost")
-        }
-        assertThrows(IllegalArgumentException::class.java) {
-            Endpoint.build(scheme = "https", host = "example.com", path = "/a/../b")
-        }
-        assertThrows(IllegalArgumentException::class.java) {
-            Endpoint.build(scheme = "https", host = "example.com", path = "/a|b")
+        for (badPath in listOf("/a/../b", "/a|b")) {
+            assertThrows(IllegalArgumentException::class.java) {
+                Endpoint.build(scheme = "https", host = "example.com", path = badPath)
+            }
         }
     }
 
@@ -435,16 +364,9 @@ class EndpointTest {
     @Test
     fun `fromEncodedString rejects malformed or invalid persisted values`() {
         val invalidEncoded = listOf(
-            "bad|format",
-            "https|example.com|443|/|v1|extra",
-            "ftp|example.com|21|/|",
-            "https||443|/|",
-            "https|example.com|0|/|",
-            "https|example.com|70000|/|",
-            "https|example.com|abc|/|",
-            "https|example.com|443|/a/../b|",
-            "https|example.com|443|/|v1/v2",
-            "http|127.1|80|/|"
+            "bad|format", "https|example.com|443|/|v1|extra", "ftp|example.com|21|/|", "https||443|/|",
+            "https|example.com|0|/|", "https|example.com|70000|/|", "https|example.com|abc|/|",
+            "https|example.com|443|/a/../b|", "https|example.com|443|/|v1/v2", "http|127.1|80|/|"
         )
         for (encoded in invalidEncoded) {
             assertThrows(
@@ -454,4 +376,220 @@ class EndpointTest {
             )
         }
     }
+
+    // ---- Deployment prefix parsing tests ----
+
+    @Test
+    fun `fromString parses deployment prefix with default ports, omitted paths, and allowed characters`() {
+        val httpsPrefixed = Endpoint.fromString("https://v1/api.example.com")
+        assertEquals(Endpoint("v1", "api.example.com", 443, "/", "https"), httpsPrefixed)
+
+        val ipv4Prefixed = Endpoint.fromString("http://staging/10.0.0.1")
+        assertEquals(Endpoint("staging", "10.0.0.1", 80, "/", "http"), ipv4Prefixed)
+
+        val ipv6Prefixed = Endpoint.fromString("https://prod/[::1]")
+        assertEquals(Endpoint("prod", "::1", 443, "/", "https"), ipv6Prefixed)
+
+        val singleLabelPortHost = Endpoint.fromString("ws://edge/hermes:9119/api/ws")
+        assertEquals(Endpoint("edge", "hermes", 9119, "/api/ws", "ws"), singleLabelPortHost)
+
+        val mixedChars = Endpoint.fromString("https://Canary_1-beta~2/API.Example.COM/Users/")
+        assertEquals(Endpoint("Canary_1-beta~2", "api.example.com", 443, "/Users", "https"), mixedChars)
+    }
+
+    @Test
+    fun `fromString does not misclassify hostnames or paths as deployment prefixes`() {
+        assertEquals(Endpoint(null, "hermes", 80, "/api/v1", "http"), Endpoint.fromString("http://hermes/api/v1"))
+        assertEquals(
+            Endpoint(null, "localhost", 80, "/api.json", "http"),
+            Endpoint.fromString("http://LOCALHOST/api.json")
+        )
+        assertEquals(
+            Endpoint(null, "api.example.com", 443, "/v1.0/status", "https"),
+            Endpoint.fromString("https://api.example.com/v1.0/status")
+        )
+        assertEquals(
+            Endpoint(null, "hermes", 9119, "/v1.0/status", "http"),
+            Endpoint.fromString("http://hermes:9119/v1.0/status")
+        )
+        assertEquals(
+            Endpoint(null, "::1", 8443, "/v1.0/status", "https"),
+            Endpoint.fromString("https://[::1]:8443/v1.0/status")
+        )
+    }
+
+    @Test
+    fun `fromString and build normalize valid prefixes and reject invalid ones`() {
+        val normalized = Endpoint.build(
+            scheme = "https", host = "api.example.com", deploymentPrefix = "  /Staging_1-beta~2/  "
+        )
+        assertEquals("Staging_1-beta~2", normalized.deploymentPrefix)
+
+        for (blankPrefix in listOf("", "   ", "/", "///")) {
+            val ep = Endpoint.build(scheme = "https", host = "api.example.com", deploymentPrefix = blankPrefix)
+            assertNull(ep.deploymentPrefix, "expected null prefix for '$blankPrefix'")
+        }
+        for (badPrefix in listOf("LOCALHOST", "LocalHost", "v1+2", "v1%20", "v1@bad")) {
+            assertThrows(IllegalArgumentException::class.java) {
+                Endpoint.build(scheme = "https", host = "api.example.com", deploymentPrefix = badPrefix)
+            }
+        }
+        for (badUrl in listOf(
+            "https://v1+2/api.example.com/api",
+            "https://v1%20/api.example.com/api",
+            "https://v1@bad/api.example.com/api"
+        )) {
+            assertThrows(IllegalArgumentException::class.java, { Endpoint.fromString(badUrl) }, badUrl)
+        }
+    }
+
+    // ---- Standard-connection TLS requirement tests ----
+
+    @Test
+    fun `requireTls and enforceTls require TLS for standard public hosts and range boundaries`() {
+        val publicBoundaryHosts = listOf(
+            "9.255.255.255", "11.0.0.0", "126.255.255.255", "128.0.0.0", "172.15.255.255", "172.32.0.0",
+            "192.167.255.255", "192.169.0.0", "100.63.255.255", "100.128.0.0", "169.253.255.255", "169.255.0.0",
+            "::2", "fbff:ffff::1", "fe00::1", "fe7f::1", "fec0::1", "::ffff:172.32.0.1", "::ffff:192.0.2.1",
+            "localhost.example.com", "api.example.com"
+        )
+        for (host in publicBoundaryHosts) {
+            val httpEp = Endpoint.build(scheme = "http", host = host, path = "/api", deploymentPrefix = "prod")
+            val wsEp = Endpoint.build(scheme = "ws", host = host, path = "/ws")
+            val httpsEp = Endpoint.build(scheme = "https", host = host, path = "/api", deploymentPrefix = "prod")
+            val wssEp = Endpoint.build(scheme = "wss", host = host, path = "/ws")
+
+            assertFalse(httpEp.isSecure)
+            assertFalse(wsEp.isSecure)
+            assertTrue(httpsEp.isSecure)
+            assertTrue(wssEp.isSecure)
+            assertTrue(requireTls(httpEp), "expected TLS required for http://$host")
+            assertTrue(requireTls(wsEp), "expected TLS required for ws://$host")
+
+            val httpErr = assertThrows(IllegalArgumentException::class.java) { enforceTls(httpEp) }
+            assertTrue(httpErr.message.orEmpty().contains("https") && httpErr.message.orEmpty().contains(httpEp.host))
+
+            val wsErr = assertThrows(IllegalArgumentException::class.java) { enforceTls(wsEp) }
+            assertTrue(wsErr.message.orEmpty().contains("wss") && wsErr.message.orEmpty().contains(wsEp.host))
+
+            assertEquals(httpsEp, enforceTls(httpsEp))
+            assertEquals(wssEp, enforceTls(wssEp))
+        }
+    }
+
+    // ---- Private-network HTTP allowance tests ----
+
+    @Test
+    fun `enforceTls permits http and ws across private IPv4, IPv6, and hostname boundaries`() {
+        val privateBoundaryHosts = listOf(
+            "127.0.0.0", "127.255.255.255", "10.0.0.0", "10.255.255.255", "172.16.0.0", "172.31.255.255",
+            "192.168.0.0", "192.168.255.255", "100.64.0.0", "100.127.255.255", "169.254.0.0", "169.254.255.255",
+            "0:0:0:0:0:0:0:1", "febf::1", "fdff::1", "::ffff:172.16.0.1", "::ffff:192.168.1.1",
+            "::ffff:169.254.1.1", "::ffff:7f00:1", "localhost", "hermes", "hermes.local", "hermes.lan",
+            "hermes.internal", "nas.home.arpa", "app.intranet", "api.corp", "box.localdomain", "svc.private",
+            "dev.localhost", "hermes.tail1234.ts.net", "hermes.beta.tailscale.net"
+        )
+        for (host in privateBoundaryHosts) {
+            val httpEp = Endpoint.build(scheme = "http", host = host, port = 9119, path = "/api")
+            val wsEp = Endpoint.build(scheme = "ws", host = host, port = 9119, path = "/ws")
+            assertFalse(requireTls(httpEp), "expected HTTP allowed for $host")
+            assertFalse(requireTls(wsEp), "expected WS allowed for $host")
+            assertEquals(httpEp, enforceTls(httpEp))
+            assertEquals(wsEp, enforceTls(wsEp))
+        }
+
+        val prefixedPrivate = Endpoint.fromString("http://staging/192.168.1.20:9119/api")
+        assertFalse(requireTls(prefixedPrivate))
+        assertEquals(prefixedPrivate, enforceTls(prefixedPrivate))
+    }
+
+    @Test
+    fun `isPrivateNetworkHost handles case, surrounding whitespace, and bracketed ipv6`() {
+        assertTrue(isPrivateNetworkHost("  HERMES.LOCAL  "))
+        assertTrue(isPrivateNetworkHost("LOCALHOST"))
+        assertTrue(isPrivateNetworkHost("[::1]"))
+        assertTrue(isPrivateNetworkHost("[FD7A:115C:A1E0::1]"))
+        assertTrue(isPrivateNetworkHost(" 10.0.0.1 "))
+        assertFalse(isPrivateNetworkHost("  EXAMPLE.COM  "))
+        assertFalse(isPrivateNetworkHost("[2001:db8::1]"))
+    }
+
+    // ---- Persistence tests ----
+
+    @Test
+    fun `toEncodedString produces expected wire format and distinct identities`() {
+        val withPrefix = Endpoint.build(
+            scheme = "https", host = "api.example.com", port = 443, path = "/data", deploymentPrefix = "v1"
+        )
+        assertEquals("https|api.example.com|443|/data|v1", withPrefix.toEncodedString())
+
+        val withoutPrefix = Endpoint.build(scheme = "http", host = "127.0.0.1", port = 80, path = "/")
+        assertEquals("http|127.0.0.1|80|/|", withoutPrefix.toEncodedString())
+
+        val otherHost = Endpoint.build(
+            scheme = "https", host = "other.example.com", port = 443, path = "/data", deploymentPrefix = "v1"
+        )
+        assertNotEquals(withPrefix.canonical, otherHost.canonical)
+        assertNotEquals(withPrefix.toEncodedString(), otherHost.toEncodedString())
+
+        val decoded = Endpoint.fromEncodedString(withPrefix.toEncodedString())
+        assertEquals(withPrefix, decoded)
+        assertEquals(withPrefix.hashCode(), decoded.hashCode())
+    }
+
+    @Test
+    fun `fromEncodedString trims whitespace, normalizes case, and preserves prefix case`() {
+        val decoded = Endpoint.fromEncodedString(" HTTPS | API.Example.COM | 8443 | /v1/chat/ | Prod_1 ")
+        val expected = Endpoint.build(
+            scheme = "https", host = "api.example.com", port = 8443, path = "/v1/chat", deploymentPrefix = "Prod_1"
+        )
+        assertEquals(expected, decoded)
+        assertEquals("Prod_1", decoded.deploymentPrefix)
+    }
+
+    @Test
+    fun `endpoint persists to disk and reloads through FileBasedVersionedDatabase`(@TempDir tempDir: File) {
+        val dbFile = File(tempDir, "endpoints.db")
+        val initial = Endpoint.build(
+            scheme = "https", host = "api.example.com", port = 8443, path = "/chat/stream", deploymentPrefix = "prod_v1"
+        )
+        val privateFallback = Endpoint.build(
+            scheme = "http", host = "fd7a:115c:a1e0::1", port = 9119, path = "/api", deploymentPrefix = "local-dev"
+        )
+
+        val writerDb = FileBasedVersionedDatabase(dbFile)
+        assertEquals(1, writerDb.insert("active_endpoint", initial.toEncodedString()))
+        assertEquals(2, writerDb.insert("active_endpoint", privateFallback.toEncodedString()))
+
+        val readerDb = FileBasedVersionedDatabase(dbFile)
+        val restoredV1 = Endpoint.fromEncodedString(requireNotNull(readerDb.retrieve("active_endpoint", version = 1)))
+        val restoredLatest = Endpoint.fromEncodedString(requireNotNull(readerDb.retrieve("active_endpoint")))
+
+        assertEquals(initial, restoredV1)
+        assertEquals(initial.canonical, restoredV1.canonical)
+        assertEquals(privateFallback, restoredLatest)
+        assertEquals(privateFallback.canonical, restoredLatest.canonical)
+        assertEquals(restoredV1, enforceTls(restoredV1))
+        assertEquals(restoredLatest, enforceTls(restoredLatest))
+    }
+
+    @Test
+    fun `persisted endpoints still enforce TLS policy and validation on reload`() {
+        val tamperedPublicHttp = Endpoint.fromEncodedString("http|example.com|80|/api|")
+        assertTrue(requireTls(tamperedPublicHttp))
+        assertThrows(IllegalArgumentException::class.java) { enforceTls(tamperedPublicHttp) }
+
+        val privateHttp = Endpoint.fromEncodedString("http|hermes.local|9119|/api|staging")
+        assertFalse(requireTls(privateHttp))
+        assertEquals(privateHttp, enforceTls(privateHttp))
+
+        for (badPersisted in listOf("", "https|example.com|443|/|localhost", "http|fe80::1%eth0|80|/|")) {
+            assertThrows(
+                IllegalArgumentException::class.java,
+                { Endpoint.fromEncodedString(badPersisted) },
+                "expected throw: $badPersisted"
+            )
+        }
+    }
 }
+
