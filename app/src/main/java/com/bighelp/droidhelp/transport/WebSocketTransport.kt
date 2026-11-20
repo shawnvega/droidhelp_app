@@ -11,6 +11,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -109,8 +110,12 @@ class WebSocketTransport(
     )
     private var queueJob: Job? = null
 
-    // Correlator stub for request/response correlation
+    // Correlator for matching incoming JSON frames and responses to outgoing request IDs
     private val correlator = RpcCorrelator()
+
+    /** Hot stream of [CorrelationEvent]s emitted when an incoming JSON frame matches a request ID. */
+    val correlationEvents: SharedFlow<CorrelationEvent>
+        get() = correlator.correlationEvents
 
     // Statistics
     private val messagesSent = AtomicInteger(0)
@@ -635,9 +640,9 @@ class WebSocketTransport(
             frame.message?.let { message ->
                 messagesReceived.incrementAndGet()
                 dispatchIncomingMessage(message)
-                // Submit message to correlator's ordered reader/writer loop
-                correlator.submit(message)
             }
+            // Submit decoded JSON frame to correlator's ordered reader/writer loop
+            correlator.submit(frame)
         }
     }
 
@@ -741,6 +746,36 @@ class WebSocketTransport(
     }
 
     /**
+     * Registers an outgoing request ID for incoming JSON frame correlation.
+     * When a matching frame arrives, a [CorrelationEvent] is emitted to [correlationEvents],
+     * any [onCorrelationEvent] listeners, and [onMatch] if provided.
+     */
+    fun registerRequest(
+        requestId: String,
+        timeoutNanos: Long = FrameCorrelator.DEFAULT_TIMEOUT_NANOS,
+        onMatch: ((CorrelationEvent) -> Unit)? = null
+    ) {
+        check(!closed.get()) { "WebSocketTransport is closed." }
+        correlator.frameCorrelator.register(requestId, timeoutNanos, onMatch)
+    }
+
+    /**
+     * Registers a listener invoked whenever an incoming JSON frame matches a pending request ID.
+     */
+    fun onCorrelationEvent(listener: (CorrelationEvent) -> Unit) {
+        if (!closed.get()) {
+            correlator.frameCorrelator.addListener(listener)
+        }
+    }
+
+    /**
+     * Unregisters a previously registered correlation event listener.
+     */
+    fun removeCorrelationEventListener(listener: (CorrelationEvent) -> Unit) {
+        correlator.frameCorrelator.removeListener(listener)
+    }
+
+    /**
      * Cancels a pending request.
      * @param requestId The request ID to cancel
      */
@@ -754,6 +789,13 @@ class WebSocketTransport(
      */
     fun pendingCount(): Int {
         return correlator.pendingCount()
+    }
+
+    /**
+     * Returns the total number of incoming frames/responses correlated to outgoing requests.
+     */
+    fun getCorrelatedFramesCount(): Int {
+        return correlator.frameCorrelator.correlatedCount
     }
 
     /**
