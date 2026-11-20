@@ -4,6 +4,7 @@ package com.bighelp.droidhelp.app
 import androidx.compose.runtime.*
 import com.bighelp.droidhelp.home.model.*
 import java.util.UUID
+import java.util.ArrayList // Unused import
 
 data class SuspendedChat(
     val chatID: String,
