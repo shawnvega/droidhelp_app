@@ -26,6 +26,7 @@ class HistoryReaderTest {
         const val TS_SERVER = 1_700_000_001_987L
         const val PAGE_OFFSET_THREE = 3
         const val PAGE_OFFSET_SEVENTEEN = 17
+        const val TIMELINE_SIZE = 7
         const val CONCURRENT_THREADS = 4
         const val CONCURRENT_ITEMS = 25
     }
@@ -459,5 +460,146 @@ class HistoryReaderTest {
         assertEquals(CONCURRENT_ITEMS, reader.size)
         assertEquals(entries.map { it.identity }.toSet(), reader.entries().map { it.identity }.toSet())
         assertTrue(reader.entries().all { it.source == HistoryEntrySource.CANONICAL_HISTORY })
+    }
+
+    @Test
+    fun `immutable key identity is invariant to non-key fields and distinct across verbatim keys and sessions`() {
+        val base = CanonicalHistoryEntry(
+            durableSessionId = SESSION_ID,
+            role = "user",
+            content = "first draft",
+            kind = "message",
+            canonicalKey = "srv-msg-1",
+            canonicalSequence = 0L,
+            toolCallId = null,
+            canonicalAttributes = emptyMap(),
+            timestampEpochMillis = TS_CLIENT,
+            source = HistoryEntrySource.STREAMED,
+            runtimeSessionId = "rt-1",
+            pageCursor = "c-1",
+            pageOffset = 0,
+            isInterim = true,
+        )
+        val mutated = CanonicalHistoryEntry(
+            durableSessionId = SESSION_ID,
+            role = "assistant",
+            content = "completely rewritten final reply",
+            kind = "tool_result",
+            canonicalKey = "srv-msg-1",
+            canonicalSequence = Long.MAX_VALUE,
+            toolCallId = "call-99",
+            canonicalAttributes = mapOf("k" to "v", "extra" to "true"),
+            timestampEpochMillis = TS_SERVER,
+            source = HistoryEntrySource.CANONICAL_HISTORY,
+            runtimeSessionId = "rt-2",
+            pageCursor = "c-9",
+            pageOffset = PAGE_OFFSET_SEVENTEEN,
+            isInterim = false,
+        )
+
+        assertEquals(HistoryEntryIdentityScheme.IMMUTABLE_KEY, base.identity.scheme)
+        assertEquals(base.identity, mutated.identity)
+        assertEquals(base.stableId, mutated.stableId)
+        assertNotEquals(base.contentHash, mutated.contentHash)
+
+        // Verbatim session ID and canonicalKey distinctions (case and whitespace) never collapse
+        assertNotEquals(base.identity, base.copy(durableSessionId = OTHER_SESSION_ID).identity)
+        assertNotEquals(base.identity, base.copy(durableSessionId = " $SESSION_ID ").identity)
+        assertNotEquals(base.identity, base.copy(canonicalKey = "SRV-MSG-1").identity)
+        assertNotEquals(base.identity, base.copy(canonicalKey = " srv-msg-1 ").identity)
+    }
+
+    @Test
+    fun `content hash and positioned identity distinguish null fields, attributes, Unicode, and sequence bounds`() {
+        val nullToolCall = CanonicalHistoryEntry(
+            durableSessionId = SESSION_ID,
+            role = "assistant",
+            content = "payload",
+            toolCallId = null,
+        )
+        val literalNullToolCall = nullToolCall.copy(toolCallId = "null")
+        assertNotEquals(nullToolCall.contentHash, literalNullToolCall.contentHash)
+        assertNotEquals(nullToolCall.identity, literalNullToolCall.identity)
+
+        val attrSplitA = nullToolCall.copy(canonicalAttributes = mapOf("ab" to "c"))
+        val attrSplitB = nullToolCall.copy(canonicalAttributes = mapOf("a" to "bc"))
+        val attrMulti = nullToolCall.copy(canonicalAttributes = mapOf("a" to "1", "b" to "2"))
+        val attrJoined = nullToolCall.copy(canonicalAttributes = mapOf("a" to "1b2"))
+        val attrEmptyEntry = nullToolCall.copy(canonicalAttributes = mapOf("" to ""))
+        assertNotEquals(attrSplitA.identity, attrSplitB.identity)
+        assertNotEquals(attrMulti.identity, attrJoined.identity)
+        assertNotEquals(nullToolCall.identity, attrEmptyEntry.identity)
+
+        // Role and kind changes alter content hash and identity
+        assertNotEquals(nullToolCall.identity, nullToolCall.copy(role = "tool").identity)
+        assertNotEquals(nullToolCall.identity, nullToolCall.copy(kind = "tool_result").identity)
+
+        // Multibyte UTF-8 and NFD vs NFC remain deterministic and verbatim
+        val nfdContent = nullToolCall.copy(content = "Cafe\u0301 \uD83D\uDE80 \u4F60\u597D")
+        val nfcContent = nullToolCall.copy(content = "Caf\u00E9 \uD83D\uDE80 \u4F60\u597D")
+        assertEquals(nfdContent.identity, nfdContent.copy().identity)
+        assertNotEquals(nfdContent.identity, nfcContent.identity)
+
+        // Extreme canonicalSequence bounds share contentHash but get distinct positioned identities
+        val seqZero = nullToolCall.copy(canonicalSequence = 0L)
+        val seqOne = nullToolCall.copy(canonicalSequence = SEQ_ONE)
+        val seqMax = nullToolCall.copy(canonicalSequence = Long.MAX_VALUE)
+        assertEquals(seqZero.contentHash, seqMax.contentHash)
+        assertEquals(setOf(seqZero.identity, seqOne.identity, seqMax.identity).size, PAGE_OFFSET_THREE)
+    }
+
+    @Test
+    fun `identity determinism holds across repeated calls, cross-scheme inputs, and independent paged readers`() {
+        val timeline = (0 until TIMELINE_SIZE).map { idx ->
+            when (idx % PAGE_OFFSET_THREE) {
+                0 -> CanonicalHistoryEntry(
+                    durableSessionId = SESSION_ID,
+                    role = "user",
+                    content = "turn-$idx",
+                    canonicalKey = "key-$idx",
+                    canonicalSequence = idx.toLong(),
+                )
+                1 -> CanonicalHistoryEntry(
+                    durableSessionId = SESSION_ID,
+                    role = "assistant",
+                    content = "turn-$idx",
+                    canonicalSequence = idx.toLong(),
+                )
+                else -> CanonicalHistoryEntry(
+                    durableSessionId = SESSION_ID,
+                    role = "assistant",
+                    content = "unkeyed-turn-$idx",
+                )
+            }
+        }
+
+        // Repeated calls and independent copies yield identical identities
+        val baselineIds = timeline.map { HistoryReader.identityOf(it) }
+        repeat(PAGE_OFFSET_THREE) {
+            val recomputed = timeline.map { entry ->
+                HistoryReader.identityOf(entry.copy(pageOffset = entry.hashCode().and(1)))
+            }
+            assertEquals(baselineIds, recomputed)
+        }
+
+        // Cross-scheme isolation even if canonicalKey equals another entry's contentHash or stableId
+        val unkeyed = timeline[2]
+        val keyedMimicHash = unkeyed.copy(canonicalKey = unkeyed.contentHash)
+        val keyedMimicStableId = unkeyed.copy(canonicalKey = unkeyed.stableId)
+        assertNotEquals(unkeyed.identity, keyedMimicHash.identity)
+        assertNotEquals(unkeyed.identity, keyedMimicStableId.identity)
+        assertNotEquals(keyedMimicHash.identity, keyedMimicStableId.identity)
+
+        // Independent readers ingesting via different page chunkings produce identical stable IDs
+        val readerOne = HistoryReader()
+        timeline.chunked(2).forEach { chunk -> readerOne.ingestPage(HistoryPage(chunk)) }
+
+        val readerTwo = HistoryReader()
+        timeline.chunked(PAGE_OFFSET_THREE).reversed().forEachIndexed { idx, chunk ->
+            readerTwo.ingestPage(HistoryPage(chunk), prepend = idx > 0)
+        }
+
+        assertEquals(baselineIds.map { it.value }, readerOne.entries().map { it.stableId })
+        assertEquals(baselineIds.map { it.value }, readerTwo.entries().map { it.stableId })
     }
 }

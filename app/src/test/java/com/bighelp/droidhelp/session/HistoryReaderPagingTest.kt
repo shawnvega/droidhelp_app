@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.util.Base64
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 
@@ -23,6 +24,9 @@ class HistoryReaderPagingTest {
         const val PAGE_SIZE_FIVE = 5
         const val PAGE_SIZE_TEN = 10
         const val PAGE_SIZE_LARGE = 100
+        const val CURSOR_SHORT_BYTES = 66
+        const val CURSOR_LONG_BYTES = 68
+        const val STREAM_SEQ_TEN = 10L
         const val CONCURRENT_THREADS = 4
         const val CONCURRENT_READ_ITERATIONS = 20
         val OPAQUE_CURSOR_REGEX = Regex("^[A-Za-z0-9_-]+$")
@@ -475,5 +479,230 @@ class HistoryReaderPagingTest {
         val finalAll = drainForwardPages(reader, pageSize = PAGE_SIZE_FOUR).flatMap { it.entries }
         assertEquals(initial.size + additional.size, finalAll.size)
         assertEquals(finalAll.size, finalAll.map { it.identity }.toSet().size)
+    }
+
+    @Test
+    fun `empty pages from empty reader, unknown session, streamed-only filter, and empty page ingestion`() {
+        val emptyReader = HistoryReader()
+        for (direction in HistoryPageDirection.entries) {
+            for (includeStreamed in listOf(false, true)) {
+                val page = emptyReader.readPage(
+                    pageSize = PAGE_SIZE_FIVE,
+                    durableSessionId = SESSION_A,
+                    direction = direction,
+                    includeStreamed = includeStreamed,
+                )
+                assertTrue(page.entries.isEmpty())
+                assertNull(page.cursor)
+                assertNull(page.nextCursor)
+                assertFalse(page.hasMore)
+            }
+        }
+
+        // Non-empty reader returns empty pages for unmatched sessions and streamed-only canonical reads
+        val reader = HistoryReader(buildStaticEntries(PAGE_SIZE_THREE, sessionId = SESSION_A))
+        for (direction in HistoryPageDirection.entries) {
+            val unknownSessionPage = reader.readPage(durableSessionId = SESSION_B, direction = direction)
+            assertTrue(unknownSessionPage.entries.isEmpty())
+            assertFalse(unknownSessionPage.hasMore)
+            assertNull(unknownSessionPage.nextCursor)
+        }
+
+        val streamedOnlyReader = HistoryReader()
+        val live = buildStaticEntries(2, sessionId = SESSION_A)
+        live.forEach { streamedOnlyReader.reconcileStreamed(it) }
+        for (direction in HistoryPageDirection.entries) {
+            val canonicalOnly = streamedOnlyReader.readPage(direction = direction, includeStreamed = false)
+            assertTrue(canonicalOnly.entries.isEmpty())
+            assertFalse(canonicalOnly.hasMore)
+            val withStreamed = streamedOnlyReader.readPage(direction = direction, includeStreamed = true)
+            assertEquals(2, withStreamed.entries.size)
+        }
+
+        // Empty page ingestion (append and prepend) is a safe no-op that preserves cursors
+        val page1 = reader.readPage(pageSize = 1)
+        assertEquals(PAGE_SIZE_THREE, reader.ingestPage(HistoryPage(emptyList()), prepend = false).size)
+        assertEquals(PAGE_SIZE_THREE, reader.ingestPage(HistoryPage(emptyList()), prepend = true).size)
+        val emptyReconcile = reader.reconcilePage(HistoryPage(emptyList()))
+        assertTrue(emptyReconcile.diff.isEmpty)
+        assertEquals(0, emptyReconcile.ignoredDuplicates)
+        val page2 = reader.readPage(pageSize = 2, cursor = page1.nextCursor)
+        assertEquals(2, page2.entries.size)
+
+        // Authoritative empty page with pruneMissingInScope clears only scoped canonical rows
+        reader.ingestPage(HistoryPage(buildStaticEntries(1, sessionId = SESSION_B, keyPrefix = "b")))
+        reader.reconcileStreamed(live[0].copy(canonicalKey = "live-a"))
+        val prunedA = reader.reconcilePage(
+            page = HistoryPage(emptyList()),
+            pruneMissingInScope = true,
+            durableSessionId = SESSION_A,
+            retainUnmatchedStreamed = true,
+        )
+        assertEquals(PAGE_SIZE_THREE, prunedA.diff.deletes.size)
+        assertTrue(reader.readPage(durableSessionId = SESSION_A, includeStreamed = false).entries.isEmpty())
+        assertEquals(1, reader.readPage(durableSessionId = SESSION_A, includeStreamed = true).entries.size)
+        assertEquals(1, reader.readPage(durableSessionId = SESSION_B).entries.size)
+    }
+
+    @Test
+    fun `backward paging handles exact-multiple boundaries, single entry, pageSize 1, and Int MAX_VALUE`() {
+        val single = buildStaticEntries(1)
+        val singlePage = HistoryReader(single).readPage(pageSize = 1, direction = HistoryPageDirection.BACKWARD)
+        assertEquals(single, singlePage.entries)
+        assertFalse(singlePage.hasMore)
+        assertNull(singlePage.nextCursor)
+
+        // Exact-multiple boundary (8 entries, pageSize 4) yields exactly 2 pages with no empty trailing page
+        val evenHistory = buildStaticEntries(PAGE_SIZE_FOUR * 2)
+        val evenReader = HistoryReader(evenHistory)
+        val bwdFirst = evenReader.readPage(pageSize = PAGE_SIZE_FOUR, direction = HistoryPageDirection.BACKWARD)
+        assertEquals(evenHistory.takeLast(PAGE_SIZE_FOUR), bwdFirst.entries)
+        assertTrue(bwdFirst.hasMore)
+        assertNotNull(bwdFirst.nextCursor)
+
+        val bwdSecond = evenReader.readPage(
+            pageSize = PAGE_SIZE_FOUR,
+            cursor = bwdFirst.nextCursor,
+            direction = HistoryPageDirection.BACKWARD,
+        )
+        assertEquals(evenHistory.take(PAGE_SIZE_FOUR), bwdSecond.entries)
+        assertFalse(bwdSecond.hasMore)
+        assertNull(bwdSecond.nextCursor)
+
+        // Sweep boundary page sizes including 1, size - 1, size, size + 1, and Int.MAX_VALUE
+        val history = buildStaticEntries(PAGE_SIZE_FIVE)
+        val reader = HistoryReader(history)
+        val boundarySizes = listOf(1, PAGE_SIZE_FOUR, PAGE_SIZE_FIVE, PAGE_SIZE_FIVE + 1, Int.MAX_VALUE)
+        for (pageSize in boundarySizes) {
+            val pages = mutableListOf<HistoryPage>()
+            var cursor: String? = null
+            do {
+                val page = reader.readPage(
+                    pageSize = pageSize,
+                    cursor = cursor,
+                    direction = HistoryPageDirection.BACKWARD,
+                )
+                pages.add(page)
+                cursor = page.nextCursor
+            } while (page.hasMore)
+            assertEquals(history, pages.reversed().flatMap { it.entries })
+            assertFalse(pages.last().hasMore)
+            assertNull(pages.last().nextCursor)
+        }
+    }
+
+    @Test
+    fun `cursors return empty terminal page when entries beyond anchor are deleted and resume if restored`() {
+        val entries = buildStaticEntries(PAGE_SIZE_THREE)
+        val fwdReader = HistoryReader(entries)
+        val fwdFirst = fwdReader.readPage(pageSize = 1)
+        val fwdCursor = requireNotNull(fwdFirst.nextCursor)
+
+        fwdReader.reconcileStream(
+            listOf(
+                StreamingHistoryRow.delete(entries[1].identity, streamSequence = 1L),
+                StreamingHistoryRow.delete(entries[2].identity, streamSequence = 2L),
+            ),
+        )
+        val fwdEmpty = fwdReader.readPage(pageSize = 2, cursor = fwdCursor)
+        assertTrue(fwdEmpty.entries.isEmpty())
+        assertEquals(fwdCursor, fwdEmpty.cursor)
+        assertFalse(fwdEmpty.hasMore)
+        assertNull(fwdEmpty.nextCursor)
+
+        // Adding a new entry after the still-present anchor makes the same cursor resume cleanly
+        val appended = buildStaticEntries(1, startIndex = PAGE_SIZE_THREE).single()
+        fwdReader.ingestPage(HistoryPage(listOf(appended)))
+        val fwdResumed = fwdReader.readPage(pageSize = 2, cursor = fwdCursor)
+        assertEquals(listOf(appended), fwdResumed.entries)
+        assertFalse(fwdResumed.hasMore)
+
+        // Symmetric check for BACKWARD mode when all entries before anchor are deleted
+        val bwdReader = HistoryReader(entries)
+        val bwdFirst = bwdReader.readPage(pageSize = 1, direction = HistoryPageDirection.BACKWARD)
+        val bwdCursor = requireNotNull(bwdFirst.nextCursor)
+        bwdReader.reconcileStream(
+            listOf(
+                StreamingHistoryRow.delete(entries[0].identity, streamSequence = 1L),
+                StreamingHistoryRow.delete(entries[1].identity, streamSequence = 2L),
+            ),
+        )
+        val bwdEmpty = bwdReader.readPage(
+            pageSize = 2,
+            cursor = bwdCursor,
+            direction = HistoryPageDirection.BACKWARD,
+        )
+        assertTrue(bwdEmpty.entries.isEmpty())
+        assertEquals(bwdCursor, bwdEmpty.cursor)
+        assertFalse(bwdEmpty.hasMore)
+        assertNull(bwdEmpty.nextCursor)
+    }
+
+    @Test
+    fun `cursors stay stable across anchor updates, non-anchor deletions, repeated reads, and independent readers`() {
+        val entries = buildStaticEntries(PAGE_SIZE_FIVE)
+        val readerA = HistoryReader(entries)
+        val readerB = HistoryReader(entries)
+
+        val pageA1 = readerA.readPage(pageSize = 2, durableSessionId = SESSION_A)
+        val pageB1 = readerB.readPage(pageSize = 2, durableSessionId = SESSION_A)
+        assertEquals(pageA1, pageB1)
+        val sharedCursor = requireNotNull(pageA1.nextCursor)
+
+        // Cursor produced by readerA works directly on readerB and is idempotent on repeated reads
+        val readB1 = readerB.readPage(pageSize = 2, cursor = sharedCursor, durableSessionId = SESSION_A)
+        val readB2 = readerB.readPage(pageSize = 2, cursor = sharedCursor, durableSessionId = SESSION_A)
+        assertEquals(readB1, readB2)
+        assertEquals(listOf(entries[2], entries[PAGE_SIZE_THREE]), readB1.entries)
+
+        // Updating anchor content (same IMMUTABLE_KEY) and deleting an earlier entry keep cursor valid
+        val updatedAnchor = entries[1].copy(content = "updated-anchor-body")
+        readerA.reconcilePage(HistoryPage(listOf(updatedAnchor)))
+        readerA.reconcileStream(
+            listOf(StreamingHistoryRow.delete(entries[0].identity, streamSequence = STREAM_SEQ_TEN)),
+        )
+        val afterMutations = readerA.readPage(
+            pageSize = PAGE_SIZE_THREE,
+            cursor = sharedCursor,
+            durableSessionId = SESSION_A,
+        )
+        assertEquals(entries.drop(2), afterMutations.entries)
+        assertFalse(afterMutations.hasMore)
+        assertNull(afterMutations.nextCursor)
+    }
+
+    @Test
+    fun `rejects non-canonical base64 cursors, corrupted payload bytes, and wrong-length tokens`() {
+        val reader = HistoryReader(buildStaticEntries(PAGE_SIZE_FOUR))
+        val validCursor = requireNotNull(reader.readPage(pageSize = 2).nextCursor)
+        val encoder = Base64.getUrlEncoder().withoutPadding()
+        val raw = Base64.getUrlDecoder().decode(validCursor)
+
+        // Flipping every significant byte region (version, flags, scope, scheme, identity, checksum) fails integrity
+        val positionsToCorrupt = listOf(0, 1, 2, raw.size / 2, raw.size - 1)
+        for (pos in positionsToCorrupt) {
+            val corrupted = raw.copyOf()
+            corrupted[pos] = (corrupted[pos].toInt() xor 1).toByte()
+            val token = encoder.encodeToString(corrupted)
+            assertThrows(InvalidHistoryCursorException::class.java) {
+                reader.readPage(pageSize = 2, cursor = token)
+            }
+        }
+
+        // Non-canonical trailing base64 bits (same decoded bytes, altered low unused bits of final char)
+        val base64Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+        val lastCharIndex = base64Alphabet.indexOf(validCursor.last())
+        val nonCanonicalLastChar = base64Alphabet[lastCharIndex xor 1]
+        val nonCanonicalCursor = validCursor.dropLast(1) + nonCanonicalLastChar
+        assertTrue(Base64.getUrlDecoder().decode(nonCanonicalCursor).contentEquals(raw))
+        assertThrows(InvalidHistoryCursorException::class.java) {
+            reader.readPage(pageSize = 2, cursor = nonCanonicalCursor)
+        }
+
+        // Valid URL-safe base64 tokens with wrong payload length
+        val shortToken = encoder.encodeToString(ByteArray(CURSOR_SHORT_BYTES))
+        val longToken = encoder.encodeToString(ByteArray(CURSOR_LONG_BYTES))
+        assertThrows(InvalidHistoryCursorException::class.java) { reader.readPage(pageSize = 2, cursor = shortToken) }
+        assertThrows(InvalidHistoryCursorException::class.java) { reader.readPage(pageSize = 2, cursor = longToken) }
     }
 }
