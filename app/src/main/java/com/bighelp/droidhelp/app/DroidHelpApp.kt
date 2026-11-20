@@ -6,6 +6,7 @@ import com.bighelp.droidhelp.home.model.*
 import java.util.UUID
 import java.util.ArrayList // Unused import
 
+// This is a very long line that should definitely trigger a detekt violation because it exceeds the default maximum line length of 120 characters by a significant margin and should be flagged as an issue.
 data class SuspendedChat(
     val chatID: String,
     val agentID: String,
