@@ -8,12 +8,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ClosedSendChannelException
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
@@ -52,23 +53,17 @@ class WebSocketTransport(
         val json: Json = Json,
         val maxFrameSize: Int = DEFAULT_MAX_FRAME_SIZE,
         val maxQueueSize: Int = DEFAULT_MAX_QUEUE_SIZE,
-        val client: OkHttpClient? = null,
-        val outboundOverflowPolicy: OutboundMessageQueue.OverflowPolicy =
-            OutboundMessageQueue.OverflowPolicy.SUSPEND,
-        val maxBufferedBytes: Long = DEFAULT_MAX_BUFFERED_BYTES,
-        val maxMessageBytes: Int = maxOf(maxFrameSize, NewlineJsonFrameDecoder.DEFAULT_MAX_MESSAGE_BYTES),
-        val maxNestingDepth: Int = NewlineJsonFrameDecoder.DEFAULT_MAX_NESTING_DEPTH
+        val client: OkHttpClient? = null
     ) {
         init {
             require(maxFrameSize > 0) { "maxFrameSize must be positive" }
             require(maxQueueSize > 0) { "maxQueueSize must be positive" }
-            require(maxBufferedBytes > 0) { "maxBufferedBytes must be positive" }
-            require(maxMessageBytes >= maxFrameSize) { "maxMessageBytes must be >= maxFrameSize" }
-            require(maxNestingDepth > 0) { "maxNestingDepth must be positive" }
         }
     }
 
-    private val requestHeaders: Map<String, String> = config.headers.toMap()
+    /** Represents a message paired with its captured socket owner for fencing. */
+    private data class FencedMessage(val message: Message, val capturedSocketOwner: SocketOwner)
+
     private val ownsHttpClient = config.client == null
     private val httpClient: OkHttpClient = config.client ?: OkHttpClient.Builder()
         .connectTimeout(DEFAULT_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -77,7 +72,6 @@ class WebSocketTransport(
         .build()
 
     private val owners = Owners()
-    private val reconnectState = ReconnectPolicy.createState()
     private val connectionLock = Any()
     private val connectionSequence = AtomicLong(0L)
     private val manuallyDisconnected = AtomicBoolean(false)
@@ -99,63 +93,26 @@ class WebSocketTransport(
     private var connectionError: Exception? = null
     private var connectionAttempts = 0
 
-    // Message and parsed-frame handling
+    // Message handling
     private val messageListeners = CopyOnWriteArrayList<(Message) -> Unit>()
-    private val parsedFrameListeners = CopyOnWriteArrayList<(ParsedJsonFrame) -> Unit>()
 
-    // Bounded inbound parsed-frame queue
-    private val parsedFrameQueue = ParsedFrameQueue(config.maxQueueSize)
+    // Bounded outbound message queue
+    private val outboundQueue: Channel<FencedMessage> = Channel(config.maxQueueSize)
+    private var queueJob: Job? = null
 
-    // Correlator for matching incoming JSON frames and responses to outgoing request IDs
+    // Correlator stub for request/response correlation
     private val correlator = RpcCorrelator()
-
-    /** Hot stream of [CorrelationEvent]s emitted when an incoming JSON frame matches a request ID. */
-    val correlationEvents: SharedFlow<CorrelationEvent>
-        get() = correlator.correlationEvents
 
     // Statistics
     private val messagesSent = AtomicInteger(0)
     private val messagesReceived = AtomicInteger(0)
-    private val parsedFramesReceived = AtomicInteger(0)
     private val framesDecoded = AtomicInteger(0)
     private val staleMessagesDropped = AtomicInteger(0)
     private val oversizedFramesDropped = AtomicInteger(0)
-    private val malformedFramesDropped = AtomicInteger(0)
 
-    // Bounded incoming frame intake & decoder
-    private val incomingIntake = WebSocketIncomingIntake(
-        config = config,
-        callbacks = object : WebSocketIncomingIntake.Callbacks {
-            override fun onDecodeResult(result: FrameDecodeResult) = applyDecodeResult(result)
-            override fun onBinaryFrameDecoded() {
-                framesDecoded.incrementAndGet()
-            }
-            override fun onOversizedDropped() {
-                oversizedFramesDropped.incrementAndGet()
-            }
-            override fun onMalformedDropped(count: Int) {
-                malformedFramesDropped.addAndGet(count)
-            }
-        }
-    )
-
-    // Bounded FIFO outbound queue + fencing + socket backpressure pipeline
-    private val outboundPipeline = WebSocketOutboundPipeline(
-        scope = scope,
-        config = config,
-        owners = owners,
-        hooks = object : WebSocketOutboundPipeline.Hooks {
-            override fun isClosed(): Boolean = closed.get()
-            override fun isConnected(): Boolean = isTransportConnected()
-            override fun currentSocket(): WebSocket? = webSocket
-            override fun onMessageSent() {
-                messagesSent.incrementAndGet()
-            }
-            override fun onStaleDropped() {
-                staleMessagesDropped.incrementAndGet()
-            }
-        }
-    )
+    init {
+        ensureQueueProcessorRunning()
+    }
 
     /**
      * Connects to the WebSocket endpoint (`/api/ws`).
@@ -186,12 +143,12 @@ class WebSocketTransport(
             attemptId == JOIN_IN_FLIGHT -> deferred?.await() ?: false
             deferred == null -> false
             else -> {
-                val capturedOwner = owners.getOwner()
+                ensureQueueProcessorRunning()
                 val channel = Channel<Any>(config.maxQueueSize)
                 synchronized(connectionLock) {
                     activeIncomingChannel = channel
                 }
-                executeConnectionAttempt(attemptId, channel, deferred, capturedOwner)
+                executeConnectionAttempt(attemptId, channel, deferred)
             }
         }
     }
@@ -199,12 +156,11 @@ class WebSocketTransport(
     private suspend fun executeConnectionAttempt(
         attemptId: Long,
         channel: Channel<Any>,
-        deferred: CompletableDeferred<Boolean>,
-        capturedOwner: Owner?
+        deferred: CompletableDeferred<Boolean>
     ): Boolean {
         val initiated = try {
             val request = buildWebSocketRequest()
-            val listener = createWebSocketListener(attemptId, channel, deferred, capturedOwner)
+            val listener = createWebSocketListener(attemptId, channel, deferred)
             val createdSocket = httpClient.newWebSocket(request, listener)
             synchronized(connectionLock) {
                 if (connectionSequence.get() == attemptId && !closed.get()) {
@@ -243,12 +199,8 @@ class WebSocketTransport(
             val wsToCancel: WebSocket?
             synchronized(connectionLock) {
                 if (connectionSequence.get() == attemptId) {
-                    connectionSequence.incrementAndGet()
                     isConnecting = false
                     pendingConnection = null
-                    if (activeIncomingChannel === channel) {
-                        activeIncomingChannel = null
-                    }
                     if (!closed.get()) {
                         _connectionState.value = ConnectionState.DISCONNECTED
                     }
@@ -258,8 +210,8 @@ class WebSocketTransport(
                     wsToCancel = null
                 }
             }
-            channel.close()
             wsToCancel?.cancel()
+            channel.close()
             deferred.complete(false)
             throw e
         }
@@ -273,12 +225,8 @@ class WebSocketTransport(
     ) {
         synchronized(connectionLock) {
             if (connectionSequence.get() == attemptId) {
-                connectionSequence.incrementAndGet()
                 connectionError = error
                 isConnecting = false
-                if (activeIncomingChannel === channel) {
-                    activeIncomingChannel = null
-                }
                 if (!closed.get()) {
                     _connectionState.value = ConnectionState.DISCONNECTED
                 }
@@ -289,126 +237,85 @@ class WebSocketTransport(
         deferred.complete(false)
     }
 
-    internal fun buildWebSocketUrl(): String = WebSocketRequestBuilder.buildUrl(endpoint, WS_PATH)
+    internal fun buildWebSocketUrl(): String {
+        val wsScheme = if (endpoint.scheme == "https") "wss" else "ws"
+        val wsCanonical = endpoint.canonical.replaceFirst("${endpoint.scheme}://", "$wsScheme://")
+        val base = wsCanonical.trimEnd('/')
+        return if (base.endsWith(WS_PATH)) base else "$base$WS_PATH"
+    }
 
-    internal fun buildWebSocketRequest(): Request =
-        WebSocketRequestBuilder.buildRequest(endpoint, requestHeaders)
+    private fun buildWebSocketRequest(): Request {
+        val requestBuilder = Request.Builder()
+            .url(buildWebSocketUrl())
+
+        config.headers.forEach { (key, value) ->
+            requestBuilder.addHeader(key, value)
+        }
+
+        return requestBuilder.build()
+    }
 
     private fun createWebSocketListener(
         attemptId: Long,
         channel: Channel<Any>,
-        deferred: CompletableDeferred<Boolean>,
-        capturedOwner: Owner?
+        deferred: CompletableDeferred<Boolean>
     ): WebSocketListener = object : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
-            handleSocketOpen(attemptId, webSocket, channel, deferred, capturedOwner)
-        }
-
-        override fun onMessage(webSocket: WebSocket, text: String) {
-            incomingIntake.enqueueText(channel, text) {
-                connectionSequence.get() == attemptId && !closed.get()
-            }
-        }
-
-        override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-            incomingIntake.enqueueBytes(channel, bytes) {
-                connectionSequence.get() == attemptId && !closed.get()
-            }
-        }
-
-        override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-            val isCurrent = synchronized(connectionLock) {
-                val matches = connectionSequence.get() == attemptId
-                if (matches && !closed.get()) {
-                    _connectionState.value = ConnectionState.CLOSING
-                }
-                matches
-            }
-            if (isCurrent) {
-                outboundPipeline.cancelProcessor()
-                webSocket.close(NORMAL_CLOSURE_CODE, reason)
+            if (connectionSequence.get() != attemptId || manuallyDisconnected.get() || closed.get()) {
+                webSocket.close(NORMAL_CLOSURE_CODE, "Stale connection")
                 channel.close()
                 deferred.complete(false)
+                return
             }
-        }
-
-        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-            handleSocketTermination(attemptId, webSocket, channel, deferred, error = null)
-        }
-
-        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-            val error = t as? Exception ?: Exception(t)
-            handleSocketTermination(attemptId, webSocket, channel, deferred, error = error)
-        }
-    }
-
-    private fun handleSocketOpen(
-        attemptId: Long,
-        socket: WebSocket,
-        channel: Channel<Any>,
-        deferred: CompletableDeferred<Boolean>,
-        capturedOwner: Owner?
-    ) {
-        val previousReceiveJob: Job?
-        val accepted = synchronized(connectionLock) {
-            val valid = connectionSequence.get() == attemptId && !manuallyDisconnected.get() && !closed.get()
-            val epochAdvanced = valid && try {
-                if (capturedOwner != null) owners.incrementSocketEpoch(capturedOwner) else owners.incrementSocketEpoch()
-                true
-            } catch (_: StaleOwnerException) {
-                false
-            }
-            if (epochAdvanced) {
-                this.webSocket = socket
+            val previousReceiveJob: Job?
+            synchronized(connectionLock) {
+                this@WebSocketTransport.webSocket = webSocket
+                // Increment socket epoch BEFORE marking connected so queued stale messages are fenced
+                owners.incrementSocketEpoch()
                 isConnecting = false
                 pendingConnection = null
                 connectionAttempts = 0
                 previousReceiveJob = receiveJob
                 _connectionState.value = ConnectionState.CONNECTED
-                correlator.start()
-                receiveJob = scope.launch { incomingIntake.consumeLoop(socket.receiveChannel(channel)) }
-                true
-            } else {
-                if (valid) {
-                    connectionSequence.incrementAndGet()
-                    isConnecting = false
-                    if (pendingConnection === deferred) pendingConnection = null
-                    if (this.webSocket === socket) this.webSocket = null
-                    if (activeIncomingChannel === channel) activeIncomingChannel = null
-                    _connectionState.value = ConnectionState.DISCONNECTED
-                }
-                previousReceiveJob = null
-                false
             }
-        }
-        if (!accepted) {
-            socket.close(NORMAL_CLOSURE_CODE, "Stale connection")
-            channel.close()
-            deferred.complete(false)
-        } else {
             previousReceiveJob?.cancel()
-            outboundPipeline.ensureProcessorRunning()
-            if (connectionSequence.get() == attemptId && !closed.get()) dispatchIncomingMessage(Message.Ready)
+            correlator.start()
+            receiveJob = scope.launch {
+                receiveMessages(webSocket.receiveChannel(channel))
+            }
+            dispatchIncomingMessage(Message.Ready)
             deferred.complete(true)
         }
-    }
 
-    private fun handleSocketTermination(
-        attemptId: Long,
-        socket: WebSocket,
-        channel: Channel<Any>,
-        deferred: CompletableDeferred<Boolean>,
-        error: Exception?
-    ) {
-        val (isCurrent, shouldReconnect) = synchronized(connectionLock) {
-            if (connectionSequence.get() != attemptId) {
-                false to false
-            } else {
-                if (this.webSocket === socket) {
-                    this.webSocket = null
+        override fun onMessage(webSocket: WebSocket, text: String) {
+            if (connectionSequence.get() == attemptId) {
+                channel.trySend(text)
+            }
+        }
+
+        override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+            if (connectionSequence.get() == attemptId) {
+                channel.trySend(bytes)
+            }
+        }
+
+        override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+            if (connectionSequence.get() != attemptId) return
+            synchronized(connectionLock) {
+                if (!closed.get()) {
+                    _connectionState.value = ConnectionState.CLOSING
                 }
-                if (activeIncomingChannel === channel) {
-                    activeIncomingChannel = null
+            }
+            webSocket.close(NORMAL_CLOSURE_CODE, reason)
+            channel.close()
+            deferred.complete(false)
+        }
+
+        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+            if (connectionSequence.get() != attemptId) return
+            synchronized(connectionLock) {
+                if (this@WebSocketTransport.webSocket === webSocket) {
+                    this@WebSocketTransport.webSocket = null
                 }
                 _connectionState.value = if (closed.get()) {
                     ConnectionState.CLOSED
@@ -419,22 +326,34 @@ class WebSocketTransport(
                 if (pendingConnection === deferred) {
                     pendingConnection = null
                 }
-                if (error != null) {
-                    connectionError = error
-                }
-                val retirement = reconnectState.retireSocketGeneration(
-                    notify = !manuallyDisconnected.get() && !closed.get(),
-                    hadConnection = true,
-                    terminallyClosed = closed.get(),
-                )
-                true to retirement.shouldAutomaticallyRecover
             }
-        }
-        if (isCurrent) {
-            outboundPipeline.cancelProcessor()
             channel.close()
             deferred.complete(false)
-            if (shouldReconnect) {
+            if (!manuallyDisconnected.get() && !closed.get()) {
+                scheduleReconnect()
+            }
+        }
+
+        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+            if (connectionSequence.get() != attemptId) return
+            synchronized(connectionLock) {
+                if (this@WebSocketTransport.webSocket === webSocket) {
+                    this@WebSocketTransport.webSocket = null
+                }
+                _connectionState.value = if (closed.get()) {
+                    ConnectionState.CLOSED
+                } else {
+                    ConnectionState.DISCONNECTED
+                }
+                isConnecting = false
+                if (pendingConnection === deferred) {
+                    pendingConnection = null
+                }
+                connectionError = t as? Exception ?: Exception(t)
+            }
+            channel.close()
+            deferred.complete(false)
+            if (!manuallyDisconnected.get() && !closed.get()) {
                 scheduleReconnect()
             }
         }
@@ -448,9 +367,6 @@ class WebSocketTransport(
         val wsToClose: WebSocket?
         val channelToClose: Channel<Any>?
         val deferredToFail: CompletableDeferred<Boolean>?
-        val connJobToCancel: Job?
-        val recvJobToCancel: Job?
-        val reconnJobToCancel: Job?
         synchronized(connectionLock) {
             manuallyDisconnected.set(true)
             connectionSequence.incrementAndGet()
@@ -467,24 +383,17 @@ class WebSocketTransport(
             activeIncomingChannel = null
             deferredToFail = pendingConnection
             pendingConnection = null
-            connJobToCancel = connectionJob
-            connectionJob = null
-            recvJobToCancel = receiveJob
-            receiveJob = null
-            reconnJobToCancel = reconnectJob
-            reconnectJob = null
-            reconnectState.retireSocketGeneration(
-                notify = false,
-                hadConnection = wasConnected,
-                terminallyClosed = closed.get(),
-            )
         }
-        channelToClose?.close()
         deferredToFail?.complete(false)
-        connJobToCancel?.cancel()
-        recvJobToCancel?.cancel()
-        reconnJobToCancel?.cancel()
-        outboundPipeline.cancelProcessor()
+        connectionJob?.cancel()
+        receiveJob?.cancel()
+        reconnectJob?.cancel()
+        queueJob?.cancel()
+        connectionJob = null
+        receiveJob = null
+        reconnectJob = null
+        queueJob = null
+        channelToClose?.close()
         if (wasConnected) {
             wsToClose?.close(NORMAL_CLOSURE_CODE, "Normal closure")
         } else {
@@ -503,10 +412,8 @@ class WebSocketTransport(
         synchronized(connectionLock) {
             _connectionState.value = ConnectionState.CLOSED
         }
-        outboundPipeline.close()
-        parsedFrameQueue.close()
+        outboundQueue.close()
         messageListeners.clear()
-        parsedFrameListeners.clear()
         correlator.shutdown()
         if (ownsHttpClient) {
             httpClient.dispatcher.executorService.shutdown()
@@ -515,67 +422,27 @@ class WebSocketTransport(
     }
 
     /**
-     * Enqueues a message onto the bounded outbound queue paired with the current [SocketOwner],
-     * respecting [WebSocketConfig.outboundOverflowPolicy] backpressure / drop settings while
-     * preserving FIFO ordering across backpressured sends.
+     * Enqueues a message onto the bounded outbound queue paired with the current [SocketOwner].
      * @param message The message to send
      */
     override fun send(message: Message) {
-        outboundPipeline.send(message)
-    }
-
-    /**
-     * Non-blocking enqueue of an outgoing [message] paired with the current [SocketOwner]
-     * onto the bounded outbound queue, applying [policy] when full.
-     *
-     * @return `true` if the message was enqueued, or `false` if rejected/dropped or closed.
-     */
-    fun enqueueOutgoing(
-        message: Message,
-        policy: OutboundMessageQueue.OverflowPolicy = config.outboundOverflowPolicy
-    ): Boolean = outboundPipeline.enqueue(message, policy)
-
-    /**
-     * Suspends until [message] paired with the current [SocketOwner] can be enqueued onto the
-     * bounded outbound queue (respecting [WebSocketConfig.outboundOverflowPolicy]).
-     */
-    suspend fun enqueueOutgoingSuspending(message: Message): Boolean =
-        outboundPipeline.enqueueSuspending(message)
-
-    /**
-     * Registers [requestId] with [RpcCorrelator] before enqueuing [message] onto the bounded
-     * outbound queue, preventing races where a fast reply arrives before registration completes.
-     */
-    fun sendWithCorrelation(
-        requestId: String,
-        message: Message,
-        timeoutNanos: Long = FrameCorrelator.DEFAULT_TIMEOUT_NANOS,
-        onMatch: ((CorrelationEvent) -> Unit)? = null
-    ) {
         check(!closed.get()) { "WebSocketTransport is closed." }
-        checkNotNull(owners.getSocketOwner()) {
+        val socketOwner = checkNotNull(owners.getSocketOwner()) {
             "No SocketOwner available. Call connect() or resumeSession() first."
         }
-        correlator.frameCorrelator.register(requestId, timeoutNanos, onMatch)
-        try {
-            send(message)
-        } catch (e: IllegalStateException) {
-            correlator.cancel(requestId)
-            throw e
+        ensureQueueProcessorRunning()
+        val fenced = FencedMessage(message, socketOwner)
+        val enqueueResult = outboundQueue.trySend(fenced)
+        if (enqueueResult.isFailure && !enqueueResult.isClosed) {
+            scope.launch {
+                try {
+                    outboundQueue.send(fenced)
+                } catch (_: ClosedSendChannelException) {
+                    // Transport closed while waiting for outbound queue capacity
+                }
+            }
         }
     }
-
-    /**
-     * Non-blocking FIFO dequeue of the next pending outgoing [Message] from the outbound queue,
-     * relieving backpressure for waiting producers, or `null` if the queue is empty.
-     */
-    fun dequeueOutgoing(): Message? = outboundPipeline.dequeue()
-
-    /** Returns the number of outgoing messages currently waiting in the outbound queue. */
-    fun getOutboundQueueSize(): Int = outboundPipeline.size()
-
-    /** Returns the number of outgoing messages dropped due to outbound queue overflow policies. */
-    fun getDroppedOutboundMessages(): Int = outboundPipeline.droppedCount()
 
     /**
      * Registers a callback for incoming messages.
@@ -587,88 +454,121 @@ class WebSocketTransport(
         }
     }
 
-    /**
-     * Registers a callback for each parsed incoming newline-delimited JSON frame.
-     * @param callback The callback to invoke for each parsed frame
-     */
-    fun onParsedFrame(callback: (ParsedJsonFrame) -> Unit) {
-        if (!closed.get()) {
-            parsedFrameListeners.add(callback)
-        }
-    }
-
-    /** Non-blocking FIFO dequeue of the next parsed incoming JSON frame, or null if empty. */
-    fun pollParsedFrame(): ParsedJsonFrame? = parsedFrameQueue.poll()
-
-    /**
-     * Suspends until the next parsed incoming JSON frame is available in FIFO order,
-     * or returns null once the transport is closed and the queue is drained.
-     */
-    suspend fun receiveParsedFrame(): ParsedJsonFrame? = parsedFrameQueue.receive()
-
-    /** Drains all currently queued parsed incoming JSON frames in FIFO order. */
-    fun drainParsedFrames(): List<ParsedJsonFrame> = parsedFrameQueue.drain()
-
-    /** Returns the number of parsed incoming JSON frames currently waiting in the queue. */
-    fun getParsedFrameQueueSize(): Int = parsedFrameQueue.size()
-
     private fun dispatchIncomingMessage(message: Message) {
         messageListeners.forEach { listener ->
             listener(message)
         }
     }
 
-    private fun dispatchParsedFrame(frame: ParsedJsonFrame) {
-        parsedFrameListeners.forEach { listener ->
-            listener(frame)
+    private fun ensureQueueProcessorRunning() {
+        synchronized(connectionLock) {
+            if (!closed.get() && queueJob?.isActive != true) {
+                queueJob = scope.launch {
+                    processOutboundQueue()
+                }
+            }
         }
     }
 
-    private fun applyDecodeResult(result: FrameDecodeResult) {
+    /**
+     * Processes the bounded outbound message queue while enforcing [SocketOwner] fencing.
+     */
+    private suspend fun processOutboundQueue() {
+        for (fenced in outboundQueue) {
+            try {
+                owners.validateSocketOwner(fenced.capturedSocketOwner)
+                if (_connectionState.value != ConnectionState.CONNECTED) {
+                    _connectionState.first { it == ConnectionState.CONNECTED }
+                }
+                owners.validateSocketOwner(fenced.capturedSocketOwner)
+                actualSend(fenced.message)
+            } catch (_: StaleOwnerException) {
+                staleMessagesDropped.incrementAndGet()
+            }
+        }
+    }
+
+    /**
+     * Performs the actual network send using newline-framed JSON encoding.
+     */
+    private fun actualSend(message: Message) {
+        val ws = webSocket ?: return
+        val jsonString = config.json.encodeToString(Message.serializer(), message)
+        if (ws.send("$jsonString\n")) {
+            messagesSent.incrementAndGet()
+        }
+    }
+
+    /**
+     * Handles incoming text messages (newline-framed JSON payloads) with bounded buffer decode.
+     * @param text The incoming text payload
+     * @param frameDecoder The per-connection bounded newline JSON decoder
+     */
+    private fun handleIncomingText(text: String, frameDecoder: NewlineJsonFrameDecoder) {
+        val result = frameDecoder.decode(text)
         if (result.oversizedDrops > 0) {
             oversizedFramesDropped.addAndGet(result.oversizedDrops)
         }
-        if (result.malformedDrops > 0) {
-            malformedFramesDropped.addAndGet(result.malformedDrops)
+        result.messages.forEach { message ->
+            messagesReceived.incrementAndGet()
+            dispatchIncomingMessage(message)
+            // Submit message to correlator's ordered reader/writer loop
+            correlator.submit(message)
         }
-        result.frames.forEach { frame ->
-            parsedFramesReceived.incrementAndGet()
-            parsedFrameQueue.enqueue(frame)
-            dispatchParsedFrame(frame)
-            frame.message?.let { message ->
-                messagesReceived.incrementAndGet()
-                dispatchIncomingMessage(message)
-            }
-            // Submit decoded JSON frame to correlator's ordered reader/writer loop
-            correlator.submit(frame)
+    }
+
+    /**
+     * Handles incoming binary messages (chunked frames) with bounded frame decode.
+     * @param bytes The binary data
+     */
+    private fun handleIncomingBytes(bytes: ByteString) {
+        if (bytes.size > config.maxFrameSize) {
+            oversizedFramesDropped.incrementAndGet()
+            return
         }
+        framesDecoded.incrementAndGet()
     }
 
     /**
      * Schedules a reconnection attempt.
      */
     private fun scheduleReconnect() {
-        synchronized(connectionLock) {
-            if (manuallyDisconnected.get() || closed.get() || reconnectJob?.isActive == true) {
-                return
+        if (manuallyDisconnected.get() || closed.get() || reconnectJob?.isActive == true) {
+            return
+        }
+
+        reconnectJob = scope.launch {
+            val delayDuration = ReconnectPolicy.delay(connectionAttempts)
+            delay(delayDuration.inWholeMilliseconds)
+            connectionAttempts++
+
+            if (manuallyDisconnected.get() || closed.get() || !ReconnectPolicy.isQuiet(connectionAttempts)) {
+                return@launch
             }
-            val currentAttempt = connectionAttempts
-            reconnectJob = scope.launch {
-                val delayDuration = ReconnectPolicy.delay(currentAttempt)
-                delay(delayDuration.inWholeMilliseconds)
-                val shouldAttempt = synchronized(connectionLock) {
-                    connectionAttempts++
-                    !manuallyDisconnected.get() && !closed.get()
-                }
-                if (shouldAttempt) {
-                    val session = reconnectState.session ?: ReconnectPolicy.getSession()
-                    if (session != null) {
-                        resumeSession(session)
-                    } else {
-                        connect()
-                    }
+
+            val session = ReconnectPolicy.getSession()
+            if (session != null) {
+                resumeSession(session)
+            } else {
+                connect()
+            }
+        }
+    }
+
+    /**
+     * Receives messages from the WebSocket using a fresh bounded newline JSON decoder per connection.
+     */
+    private suspend fun receiveMessages(channel: ReceiveChannel<Any>) {
+        val frameDecoder = NewlineJsonFrameDecoder(config.json, config.maxFrameSize)
+        try {
+            for (message in channel) {
+                when (message) {
+                    is String -> handleIncomingText(message, frameDecoder)
+                    is ByteString -> handleIncomingBytes(message)
                 }
             }
+        } finally {
+            frameDecoder.reset()
         }
     }
 
@@ -677,13 +577,10 @@ class WebSocketTransport(
      * @param session The session to resume.
      */
     override fun resumeSession(session: Session) {
-        synchronized(connectionLock) {
-            if (closed.get()) return
-            reconnectState.setSession(session)
-            ReconnectPolicy.setSession(session)
-            SecureInput.bind(session.profile)
-            connectionJob = scope.launch { connect() }
-        }
+        if (closed.get()) return
+        ReconnectPolicy.setSession(session)
+        SecureInput.bind(session.profile)
+        connectionJob = scope.launch { connect() }
     }
 
     /**
@@ -692,38 +589,7 @@ class WebSocketTransport(
      * @param callback The callback to invoke when a response is received
      */
     fun register(requestId: String, callback: (Message) -> Unit) {
-        check(!closed.get()) { "WebSocketTransport is closed." }
         correlator.register(requestId, callback)
-    }
-
-    /**
-     * Registers an outgoing request ID for incoming JSON frame correlation.
-     * When a matching frame arrives, a [CorrelationEvent] is emitted to [correlationEvents],
-     * any [onCorrelationEvent] listeners, and [onMatch] if provided.
-     */
-    fun registerRequest(
-        requestId: String,
-        timeoutNanos: Long = FrameCorrelator.DEFAULT_TIMEOUT_NANOS,
-        onMatch: ((CorrelationEvent) -> Unit)? = null
-    ) {
-        check(!closed.get()) { "WebSocketTransport is closed." }
-        correlator.frameCorrelator.register(requestId, timeoutNanos, onMatch)
-    }
-
-    /**
-     * Registers a listener invoked whenever an incoming JSON frame matches a pending request ID.
-     */
-    fun onCorrelationEvent(listener: (CorrelationEvent) -> Unit) {
-        if (!closed.get()) {
-            correlator.frameCorrelator.addListener(listener)
-        }
-    }
-
-    /**
-     * Unregisters a previously registered correlation event listener.
-     */
-    fun removeCorrelationEventListener(listener: (CorrelationEvent) -> Unit) {
-        correlator.frameCorrelator.removeListener(listener)
     }
 
     /**
@@ -738,45 +604,70 @@ class WebSocketTransport(
      * Returns the number of pending requests.
      * @return The number of pending requests
      */
-    fun pendingCount(): Int = correlator.pendingCount()
+    fun pendingCount(): Int {
+        return correlator.pendingCount()
+    }
 
     /**
-     * Returns the total number of incoming frames/responses correlated to outgoing requests.
+     * Returns the number of messages sent.
+     * @return The number of messages sent
      */
-    fun getCorrelatedFramesCount(): Int = correlator.frameCorrelator.correlatedCount
+    fun getMessagesSent(): Int {
+        return messagesSent.get()
+    }
 
-    /** Returns the number of messages sent. */
-    fun getMessagesSent(): Int = messagesSent.get()
+    /**
+     * Returns the number of messages received.
+     * @return The number of messages received
+     */
+    fun getMessagesReceived(): Int {
+        return messagesReceived.get()
+    }
 
-    /** Returns the number of messages received. */
-    fun getMessagesReceived(): Int = messagesReceived.get()
+    /**
+     * Returns the number of binary frames decoded.
+     * @return The number of frames decoded
+     */
+    fun getFramesDecoded(): Int {
+        return framesDecoded.get()
+    }
 
-    /** Returns the number of binary frames decoded. */
-    fun getFramesDecoded(): Int = framesDecoded.get()
+    /**
+     * Returns the number of outbound messages dropped due to stale socket ownership.
+     */
+    fun getStaleMessagesDropped(): Int {
+        return staleMessagesDropped.get()
+    }
 
-    /** Returns the number of outbound messages dropped due to stale socket ownership. */
-    fun getStaleMessagesDropped(): Int = staleMessagesDropped.get()
+    /**
+     * Returns the number of inbound frames dropped for exceeding [WebSocketConfig.maxFrameSize].
+     */
+    fun getOversizedFramesDropped(): Int {
+        return oversizedFramesDropped.get()
+    }
 
-    /** Returns the number of inbound frames dropped for exceeding [WebSocketConfig.maxFrameSize]. */
-    fun getOversizedFramesDropped(): Int = oversizedFramesDropped.get()
+    /**
+     * Returns whether the transport is connected.
+     * @return true if connected, false otherwise
+     */
+    fun isTransportConnected(): Boolean {
+        return _connectionState.value == ConnectionState.CONNECTED
+    }
 
-    /** Returns the total number of valid JSON frames parsed and enqueued. */
-    fun getParsedFramesReceived(): Int = parsedFramesReceived.get()
+    /**
+     * Returns whether this transport has been permanently closed.
+     */
+    fun isClosed(): Boolean {
+        return closed.get()
+    }
 
-    /** Returns the number of malformed inbound JSON frames dropped gracefully. */
-    fun getMalformedFramesDropped(): Int = malformedFramesDropped.get()
-
-    /** Returns the number of oldest parsed frames evicted when the inbound queue reached capacity. */
-    fun getDroppedQueuedFrames(): Int = parsedFrameQueue.droppedCount()
-
-    /** Returns whether the transport is connected. */
-    fun isTransportConnected(): Boolean = _connectionState.value == ConnectionState.CONNECTED
-
-    /** Returns whether this transport has been permanently closed. */
-    fun isClosed(): Boolean = closed.get()
-
-    /** Returns the connection error, if any. */
-    fun getConnectionError(): Exception? = connectionError
+    /**
+     * Returns the connection error, if any.
+     * @return The connection error, or null if no error
+     */
+    fun getConnectionError(): Exception? {
+        return connectionError
+    }
 
     /** Returns the owners instance. */
     fun getOwners(): Owners = owners
@@ -784,7 +675,6 @@ class WebSocketTransport(
     /** Updates the current sign-in state. */
     fun setSignIn(signIn: SignIn) {
         owners.updateSignIn(signIn)
-        reconnectState.onSignInTransition(signIn)
     }
 
     /** Updates the current owner state. */
@@ -800,7 +690,6 @@ class WebSocketTransport(
         const val NORMAL_CLOSURE_CODE = 1000
         const val DEFAULT_MAX_FRAME_SIZE = 1024 * 1024 // 1MB
         const val DEFAULT_MAX_QUEUE_SIZE = 1000
-        const val DEFAULT_MAX_BUFFERED_BYTES = 1024L * 1024L // 1MB
         const val DEFAULT_CONNECT_TIMEOUT_SECONDS = 30L
         const val DEFAULT_READ_TIMEOUT_SECONDS = 0L
         const val DEFAULT_WRITE_TIMEOUT_SECONDS = 30L

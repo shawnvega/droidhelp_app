@@ -13,6 +13,8 @@ Android client built with Jetpack Compose, Kotlin, OkHttp, and Kotlin Serializat
 - **Run a single unit test**: `./gradlew :app:testDebugUnitTest --tests "com.bighelp.droidhelp.<ClassName>"`
 - **Run Android instrumentation tests**: `./gradlew connectedAndroidTest`
 - **Test Stack**: Configured with `useJUnitPlatform()` (JUnit 5), alongside JUnit 4, Robolectric, MockWebServer, and `kotlinx-coroutines-test`.
+- **Integration Test Boilerplate**: When writing `MockWebServer` / coroutine integration tests, copy imports and setup verbatim from `app/src/test/java/com/bighelp/droidhelp/transport/UnsupportedMethodIntegrationTest.kt` (JUnit 5 `org.junit.jupiter.api.*`, `okhttp3.mockwebserver.*`, `kotlinx.coroutines.test.runTest`, `kotlinx.coroutines.withTimeoutOrNull`).
+- **Iteration Workflow**: Pass `--no-daemon --console=plain --warning-mode=none -q` (or `| tail -n 50` without `-q` for test summaries) to `./gradlew`, iterate with `--tests "com.bighelp.droidhelp.<ClassName>"`, and run full `./gradlew test --no-daemon --console=plain --warning-mode=none | tail -n 50` only once at the end.
 
 ## Code Style & Conventions
 - **Stack**: Android, Jetpack Compose (Material 3), Kotlin Coroutines.
