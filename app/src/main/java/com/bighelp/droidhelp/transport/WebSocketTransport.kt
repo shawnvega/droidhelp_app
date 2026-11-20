@@ -77,6 +77,7 @@ class WebSocketTransport(
         .build()
 
     private val owners = Owners()
+    private val reconnectState = ReconnectPolicy.createState()
     private val connectionLock = Any()
     private val connectionSequence = AtomicLong(0L)
     private val manuallyDisconnected = AtomicBoolean(false)
@@ -411,7 +412,12 @@ class WebSocketTransport(
                 if (error != null) {
                     connectionError = error
                 }
-                true to (!manuallyDisconnected.get() && !closed.get())
+                val retirement = reconnectState.retireSocketGeneration(
+                    notify = !manuallyDisconnected.get() && !closed.get(),
+                    hadConnection = true,
+                    terminallyClosed = closed.get(),
+                )
+                true to retirement.shouldAutomaticallyRecover
             }
         }
         if (isCurrent) {
@@ -457,6 +463,11 @@ class WebSocketTransport(
             receiveJob = null
             reconnJobToCancel = reconnectJob
             reconnectJob = null
+            reconnectState.retireSocketGeneration(
+                notify = false,
+                hadConnection = wasConnected,
+                terminallyClosed = closed.get(),
+            )
         }
         channelToClose?.close()
         deferredToFail?.complete(false)
@@ -637,12 +648,10 @@ class WebSocketTransport(
                 delay(delayDuration.inWholeMilliseconds)
                 val shouldAttempt = synchronized(connectionLock) {
                     connectionAttempts++
-                    !manuallyDisconnected.get() &&
-                        !closed.get() &&
-                        ReconnectPolicy.isQuiet(connectionAttempts)
+                    !manuallyDisconnected.get() && !closed.get()
                 }
                 if (shouldAttempt) {
-                    val session = ReconnectPolicy.getSession()
+                    val session = reconnectState.session ?: ReconnectPolicy.getSession()
                     if (session != null) {
                         resumeSession(session)
                     } else {
@@ -660,6 +669,7 @@ class WebSocketTransport(
     override fun resumeSession(session: Session) {
         synchronized(connectionLock) {
             if (closed.get()) return
+            reconnectState.setSession(session)
             ReconnectPolicy.setSession(session)
             SecureInput.bind(session.profile)
             connectionJob = scope.launch { connect() }
@@ -764,6 +774,7 @@ class WebSocketTransport(
     /** Updates the current sign-in state. */
     fun setSignIn(signIn: SignIn) {
         owners.updateSignIn(signIn)
+        reconnectState.onSignInTransition(signIn)
     }
 
     /** Updates the current owner state. */
