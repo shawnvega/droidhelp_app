@@ -1,29 +1,44 @@
 package com.bighelp.droidhelp.transport
 
-import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 
 /**
  * Result of decoding an inbound text chunk through [NewlineJsonFrameDecoder].
  */
-internal data class FrameDecodeResult(
-    val messages: List<Message>,
+data class FrameDecodeResult(
+    val frames: List<ParsedJsonFrame> = emptyList(),
+    val messages: List<Message> = frames.mapNotNull { it.message },
     val oversizedDrops: Int = 0,
     val malformedDrops: Int = 0
 )
 
 /**
- * Bounded decoder for newline-framed JSON [Message] payloads.
+ * Bounded decoder for newline-framed JSON object payloads.
  *
- * Enforces [maxBufferSize] (in UTF-8 bytes) for both individual inbound chunks and
- * buffered partial frames split across multiple WebSocket text frames.
+ * Splits incoming chunks on `\n`, parses each non-blank line as a JSON object via
+ * [JsonFrameParser] to extract `headers`, `payload`, and optional typed [Message] fields,
+ * enforces [maxBufferSize] (in UTF-8 bytes per frame), [maxMessageBytes] per chunk,
+ * [maxBatchFrames] per chunk, and [maxNestingDepth] per JSON object, and recovers
+ * gracefully from malformed or oversized frames.
  */
-internal class NewlineJsonFrameDecoder(
-    private val json: Json,
-    private val maxBufferSize: Int
+class NewlineJsonFrameDecoder(
+    private val json: Json = Json,
+    private val maxBufferSize: Int = DEFAULT_MAX_FRAME_BYTES,
+    private val maxMessageBytes: Int = maxOf(maxBufferSize, DEFAULT_MAX_MESSAGE_BYTES),
+    private val maxBatchFrames: Int = DEFAULT_MAX_BATCH_FRAMES,
+    private val maxNestingDepth: Int = DEFAULT_MAX_NESTING_DEPTH
 ) {
     init {
         require(maxBufferSize > 0) { "maxBufferSize must be positive" }
+        require(maxMessageBytes >= maxBufferSize) { "maxMessageBytes must be >= maxBufferSize" }
+        require(maxBatchFrames > 0) { "maxBatchFrames must be positive" }
+        require(maxNestingDepth > 0) { "maxNestingDepth must be positive" }
+    }
+
+    private class BatchAccumulator {
+        val frames = mutableListOf<ParsedJsonFrame>()
+        var oversizedDrops = 0
+        var malformedDrops = 0
     }
 
     private val buffer = StringBuilder()
@@ -31,15 +46,13 @@ internal class NewlineJsonFrameDecoder(
 
     fun decode(chunk: String): FrameDecodeResult {
         val chunkBytes = utf8Size(chunk)
-        if (chunkBytes > maxBufferSize) {
-            reset()
-            return FrameDecodeResult(messages = emptyList(), oversizedDrops = 1)
-        }
-
-        return if ('\n' !in chunk) {
-            decodeWithoutNewline(chunk, chunkBytes)
-        } else {
-            decodeWithNewlines(chunk)
+        return when {
+            chunkBytes > maxMessageBytes -> {
+                reset()
+                FrameDecodeResult(oversizedDrops = 1)
+            }
+            '\n' !in chunk -> decodeWithoutNewline(chunk, chunkBytes)
+            else -> decodeWithNewlines(chunk)
         }
     }
 
@@ -51,23 +64,29 @@ internal class NewlineJsonFrameDecoder(
     fun bufferedByteCount(): Int = bufferBytes
 
     private fun decodeWithoutNewline(chunk: String, chunkBytes: Int): FrameDecodeResult {
-        return if (buffer.isEmpty()) {
-            decodeFreshWithoutNewline(chunk, chunkBytes)
-        } else {
-            decodeBufferedWithoutNewline(chunk, chunkBytes)
+        return when {
+            chunkBytes > maxBufferSize -> {
+                reset()
+                FrameDecodeResult(oversizedDrops = 1)
+            }
+            buffer.isEmpty() -> decodeFreshWithoutNewline(chunk, chunkBytes)
+            else -> decodeBufferedWithoutNewline(chunk, chunkBytes)
         }
     }
 
     private fun decodeFreshWithoutNewline(chunk: String, chunkBytes: Int): FrameDecodeResult {
         val trimmed = chunk.trim()
-        val direct = tryDecode(trimmed)
-        return when {
-            trimmed.isEmpty() -> FrameDecodeResult(emptyList())
-            direct != null -> FrameDecodeResult(listOf(direct))
-            else -> {
-                buffer.append(chunk)
-                bufferBytes = chunkBytes
-                FrameDecodeResult(emptyList())
+        return if (trimmed.isEmpty()) {
+            FrameDecodeResult()
+        } else {
+            when (val outcome = JsonFrameParser.parse(trimmed, json, maxNestingDepth)) {
+                is FrameParseOutcome.Valid -> FrameDecodeResult(frames = listOf(outcome.frame))
+                FrameParseOutcome.DefinitivelyMalformed -> FrameDecodeResult(malformedDrops = 1)
+                FrameParseOutcome.IncompleteOrInvalid -> {
+                    buffer.append(chunk)
+                    bufferBytes = chunkBytes
+                    FrameDecodeResult()
+                }
             }
         }
     }
@@ -75,122 +94,133 @@ internal class NewlineJsonFrameDecoder(
     private fun decodeBufferedWithoutNewline(chunk: String, chunkBytes: Int): FrameDecodeResult {
         if (bufferBytes + chunkBytes > maxBufferSize) {
             reset()
-            return FrameDecodeResult(messages = emptyList(), oversizedDrops = 1)
+            return FrameDecodeResult(oversizedDrops = 1)
         }
 
-        val combinedMessage = tryDecode((buffer.toString() + chunk).trim())
-        val standaloneMessage = if (combinedMessage == null) tryDecode(chunk.trim()) else null
-        return when {
-            combinedMessage != null -> {
+        val combinedText = (buffer.toString() + chunk).trim()
+        return when (val combined = JsonFrameParser.parse(combinedText, json, maxNestingDepth)) {
+            is FrameParseOutcome.Valid -> {
                 reset()
-                FrameDecodeResult(listOf(combinedMessage))
+                FrameDecodeResult(frames = listOf(combined.frame))
             }
-            standaloneMessage != null -> {
+            FrameParseOutcome.DefinitivelyMalformed -> {
                 reset()
-                FrameDecodeResult(messages = listOf(standaloneMessage), malformedDrops = 1)
+                FrameDecodeResult(malformedDrops = 1)
             }
-            else -> {
+            FrameParseOutcome.IncompleteOrInvalid -> decodeStandaloneFallback(chunk, chunkBytes)
+        }
+    }
+
+    private fun decodeStandaloneFallback(chunk: String, chunkBytes: Int): FrameDecodeResult {
+        return when (val standalone = JsonFrameParser.parse(chunk.trim(), json, maxNestingDepth)) {
+            is FrameParseOutcome.Valid -> {
+                reset()
+                FrameDecodeResult(frames = listOf(standalone.frame), malformedDrops = 1)
+            }
+            FrameParseOutcome.DefinitivelyMalformed -> {
+                reset()
+                FrameDecodeResult(malformedDrops = 2)
+            }
+            FrameParseOutcome.IncompleteOrInvalid -> {
                 buffer.append(chunk)
                 bufferBytes += chunkBytes
-                FrameDecodeResult(emptyList())
+                FrameDecodeResult()
             }
         }
     }
 
     private fun decodeWithNewlines(chunk: String): FrameDecodeResult {
-        val messages = mutableListOf<Message>()
-        var oversizedDrops = 0
-        var malformedDrops = 0
-
+        val acc = BatchAccumulator()
         val lines = chunk.split('\n')
-        val (firstOversized, firstMalformed) = decodeFirstLine(lines[0], messages)
-        oversizedDrops += firstOversized
-        malformedDrops += firstMalformed
 
+        decodeFirstLine(lines[0], acc)
         for (index in 1 until lines.lastIndex) {
-            malformedDrops += decodeCompleteLine(lines[index], messages)
+            decodeCompleteLine(lines[index], acc)
         }
-
-        handleTrailingSegment(lines.last(), messages)
+        handleTrailingSegment(lines.last(), acc)
 
         return FrameDecodeResult(
-            messages = messages,
-            oversizedDrops = oversizedDrops,
-            malformedDrops = malformedDrops
+            frames = acc.frames,
+            oversizedDrops = acc.oversizedDrops,
+            malformedDrops = acc.malformedDrops
         )
     }
 
-    private fun handleTrailingSegment(trailing: String, messages: MutableList<Message>) {
-        val trimmedTrailing = trailing.trim()
-        if (trimmedTrailing.isEmpty()) return
-        val standalone = tryDecode(trimmedTrailing)
-        if (standalone != null) {
-            messages.add(standalone)
-        } else {
-            buffer.append(trailing)
-            bufferBytes = utf8Size(trailing)
-        }
-    }
-
-    private fun decodeFirstLine(firstPart: String, messages: MutableList<Message>): Pair<Int, Int> {
+    private fun decodeFirstLine(firstPart: String, acc: BatchAccumulator) {
         if (buffer.isEmpty()) {
-            return 0 to decodeCompleteLine(firstPart, messages)
-        }
-
-        val firstBytes = utf8Size(firstPart)
-        return if (bufferBytes + firstBytes > maxBufferSize) {
+            decodeCompleteLine(firstPart, acc)
+        } else if (bufferBytes + utf8Size(firstPart) > maxBufferSize) {
             reset()
-            1 to 0
+            acc.oversizedDrops++
         } else {
             val combined = buffer.append(firstPart).toString().trim()
             reset()
-            decodeCombinedOrFallback(combined, firstPart.trim(), messages)
+            if (combined.isNotEmpty()) {
+                when (val combinedOutcome = JsonFrameParser.parse(combined, json, maxNestingDepth)) {
+                    is FrameParseOutcome.Valid -> recordValidFrame(combinedOutcome.frame, acc)
+                    else -> decodeFallbackLine(firstPart.trim(), acc)
+                }
+            }
         }
     }
 
-    private fun decodeCombinedOrFallback(
-        combined: String,
-        fallback: String,
-        messages: MutableList<Message>
-    ): Pair<Int, Int> {
-        if (combined.isEmpty()) return 0 to 0
-        val combinedMsg = tryDecode(combined)
-        val fallbackMsg = if (combinedMsg == null) tryDecode(fallback) else null
-        return when {
-            combinedMsg != null -> {
-                messages.add(combinedMsg)
-                0 to 0
+    private fun decodeFallbackLine(fallback: String, acc: BatchAccumulator) {
+        when (val fallbackOutcome = JsonFrameParser.parse(fallback, json, maxNestingDepth)) {
+            is FrameParseOutcome.Valid -> {
+                acc.malformedDrops++
+                recordValidFrame(fallbackOutcome.frame, acc)
             }
-            fallbackMsg != null -> {
-                messages.add(fallbackMsg)
-                0 to 1
-            }
-            else -> 0 to 1
+            else -> acc.malformedDrops++
         }
     }
 
-    private fun decodeCompleteLine(line: String, messages: MutableList<Message>): Int {
+    private fun decodeCompleteLine(line: String, acc: BatchAccumulator) {
         val trimmed = line.trim()
-        if (trimmed.isEmpty()) return 0
-        val decoded = tryDecode(trimmed)
-        return if (decoded != null) {
-            messages.add(decoded)
-            0
-        } else {
-            1
+        if (trimmed.isEmpty()) return
+        if (utf8Size(line) > maxBufferSize) {
+            acc.oversizedDrops++
+            return
+        }
+
+        when (val outcome = JsonFrameParser.parse(trimmed, json, maxNestingDepth)) {
+            is FrameParseOutcome.Valid -> recordValidFrame(outcome.frame, acc)
+            else -> acc.malformedDrops++
         }
     }
 
-    private fun tryDecode(payload: String): Message? {
-        if (payload.isEmpty()) return null
-        return try {
-            json.decodeFromString(Message.serializer(), payload)
-        } catch (_: SerializationException) {
-            null
-        } catch (_: IllegalArgumentException) {
-            null
+    private fun handleTrailingSegment(trailing: String, acc: BatchAccumulator) {
+        val trimmedTrailing = trailing.trim()
+        if (trimmedTrailing.isEmpty()) return
+        val trailingBytes = utf8Size(trailing)
+        if (trailingBytes > maxBufferSize) {
+            acc.oversizedDrops++
+            return
+        }
+
+        when (val outcome = JsonFrameParser.parse(trimmedTrailing, json, maxNestingDepth)) {
+            is FrameParseOutcome.Valid -> recordValidFrame(outcome.frame, acc)
+            FrameParseOutcome.DefinitivelyMalformed -> acc.malformedDrops++
+            FrameParseOutcome.IncompleteOrInvalid -> {
+                buffer.append(trailing)
+                bufferBytes = trailingBytes
+            }
+        }
+    }
+
+    private fun recordValidFrame(frame: ParsedJsonFrame, acc: BatchAccumulator) {
+        if (acc.frames.size >= maxBatchFrames) {
+            acc.oversizedDrops++
+        } else {
+            acc.frames.add(frame)
         }
     }
 
     private fun utf8Size(text: String): Int = text.toByteArray(Charsets.UTF_8).size
+
+    companion object {
+        const val DEFAULT_MAX_FRAME_BYTES = 1024 * 1024 // 1 MiB
+        const val DEFAULT_MAX_MESSAGE_BYTES = 4 * 1024 * 1024 // 4 MiB (matches iOS DirectHermesWire)
+        const val DEFAULT_MAX_BATCH_FRAMES = 4_096 // matches iOS DirectHermesWire.maximumBatchCount
+        const val DEFAULT_MAX_NESTING_DEPTH = 64 // matches iOS DirectHermesWire.validateNesting
+    }
 }

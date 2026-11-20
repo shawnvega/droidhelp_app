@@ -93,8 +93,12 @@ class WebSocketTransport(
     private var connectionError: Exception? = null
     private var connectionAttempts = 0
 
-    // Message handling
+    // Message and parsed-frame handling
     private val messageListeners = CopyOnWriteArrayList<(Message) -> Unit>()
+    private val parsedFrameListeners = CopyOnWriteArrayList<(ParsedJsonFrame) -> Unit>()
+
+    // Bounded inbound parsed-frame queue
+    private val parsedFrameQueue = ParsedFrameQueue(config.maxQueueSize)
 
     // Bounded outbound message queue
     private val outboundQueue: Channel<FencedMessage> = Channel(config.maxQueueSize)
@@ -106,9 +110,11 @@ class WebSocketTransport(
     // Statistics
     private val messagesSent = AtomicInteger(0)
     private val messagesReceived = AtomicInteger(0)
+    private val parsedFramesReceived = AtomicInteger(0)
     private val framesDecoded = AtomicInteger(0)
     private val staleMessagesDropped = AtomicInteger(0)
     private val oversizedFramesDropped = AtomicInteger(0)
+    private val malformedFramesDropped = AtomicInteger(0)
 
     init {
         ensureQueueProcessorRunning()
@@ -413,7 +419,9 @@ class WebSocketTransport(
             _connectionState.value = ConnectionState.CLOSED
         }
         outboundQueue.close()
+        parsedFrameQueue.close()
         messageListeners.clear()
+        parsedFrameListeners.clear()
         correlator.shutdown()
         if (ownsHttpClient) {
             httpClient.dispatcher.executorService.shutdown()
@@ -454,9 +462,40 @@ class WebSocketTransport(
         }
     }
 
+    /**
+     * Registers a callback for each parsed incoming newline-delimited JSON frame.
+     * @param callback The callback to invoke for each parsed frame
+     */
+    fun onParsedFrame(callback: (ParsedJsonFrame) -> Unit) {
+        if (!closed.get()) {
+            parsedFrameListeners.add(callback)
+        }
+    }
+
+    /** Non-blocking FIFO dequeue of the next parsed incoming JSON frame, or null if empty. */
+    fun pollParsedFrame(): ParsedJsonFrame? = parsedFrameQueue.poll()
+
+    /**
+     * Suspends until the next parsed incoming JSON frame is available in FIFO order,
+     * or returns null once the transport is closed and the queue is drained.
+     */
+    suspend fun receiveParsedFrame(): ParsedJsonFrame? = parsedFrameQueue.receive()
+
+    /** Drains all currently queued parsed incoming JSON frames in FIFO order. */
+    fun drainParsedFrames(): List<ParsedJsonFrame> = parsedFrameQueue.drain()
+
+    /** Returns the number of parsed incoming JSON frames currently waiting in the queue. */
+    fun getParsedFrameQueueSize(): Int = parsedFrameQueue.size()
+
     private fun dispatchIncomingMessage(message: Message) {
         messageListeners.forEach { listener ->
             listener(message)
+        }
+    }
+
+    private fun dispatchParsedFrame(frame: ParsedJsonFrame) {
+        parsedFrameListeners.forEach { listener ->
+            listener(frame)
         }
     }
 
@@ -500,33 +539,69 @@ class WebSocketTransport(
     }
 
     /**
-     * Handles incoming text messages (newline-framed JSON payloads) with bounded buffer decode.
+     * Handles incoming text messages (newline-framed JSON payloads) with bounded decode,
+     * storing parsed frames in the bounded inbound queue and dispatching listeners.
      * @param text The incoming text payload
      * @param frameDecoder The per-connection bounded newline JSON decoder
      */
     private fun handleIncomingText(text: String, frameDecoder: NewlineJsonFrameDecoder) {
-        val result = frameDecoder.decode(text)
+        applyDecodeResult(frameDecoder.decode(text))
+    }
+
+    private fun applyDecodeResult(result: FrameDecodeResult) {
         if (result.oversizedDrops > 0) {
             oversizedFramesDropped.addAndGet(result.oversizedDrops)
         }
-        result.messages.forEach { message ->
-            messagesReceived.incrementAndGet()
-            dispatchIncomingMessage(message)
-            // Submit message to correlator's ordered reader/writer loop
-            correlator.submit(message)
+        if (result.malformedDrops > 0) {
+            malformedFramesDropped.addAndGet(result.malformedDrops)
+        }
+        result.frames.forEach { frame ->
+            parsedFramesReceived.incrementAndGet()
+            parsedFrameQueue.enqueue(frame)
+            dispatchParsedFrame(frame)
+            frame.message?.let { message ->
+                messagesReceived.incrementAndGet()
+                dispatchIncomingMessage(message)
+                // Submit message to correlator's ordered reader/writer loop
+                correlator.submit(message)
+            }
         }
     }
 
     /**
-     * Handles incoming binary messages (chunked frames) with bounded frame decode.
+     * Handles incoming binary messages with bounded frame decode.
+     * Binary messages carrying UTF-8 newline-delimited JSON objects are also decoded
+     * into the parsed frame queue without perturbing the text stream's partial buffer.
      * @param bytes The binary data
      */
     private fun handleIncomingBytes(bytes: ByteString) {
-        if (bytes.size > config.maxFrameSize) {
-            oversizedFramesDropped.incrementAndGet()
-            return
+        val maxMessageBytes = maxOf(config.maxFrameSize, NewlineJsonFrameDecoder.DEFAULT_MAX_MESSAGE_BYTES)
+        val hasNewline = bytes.indexOf(NEWLINE_BYTES) != -1
+        when {
+            bytes.size > maxMessageBytes -> oversizedFramesDropped.incrementAndGet()
+            bytes.size > config.maxFrameSize && !hasNewline -> oversizedFramesDropped.incrementAndGet()
+            else -> decodeIncomingBytes(bytes)
         }
-        framesDecoded.incrementAndGet()
+    }
+
+    private fun decodeIncomingBytes(bytes: ByteString) {
+        val text = bytes.utf8()
+        if (!looksLikeJsonFrame(text)) {
+            if (bytes.size > config.maxFrameSize) {
+                oversizedFramesDropped.incrementAndGet()
+            } else {
+                framesDecoded.incrementAndGet()
+            }
+        } else {
+            framesDecoded.incrementAndGet()
+            val binaryDecoder = NewlineJsonFrameDecoder(config.json, config.maxFrameSize)
+            applyDecodeResult(binaryDecoder.decode(text))
+        }
+    }
+
+    private fun looksLikeJsonFrame(text: String): Boolean {
+        val firstChar = text.firstOrNull { !it.isWhitespace() }
+        return firstChar == '{' || firstChar == '['
     }
 
     /**
@@ -647,6 +722,27 @@ class WebSocketTransport(
     }
 
     /**
+     * Returns the total number of valid JSON frames parsed and enqueued.
+     */
+    fun getParsedFramesReceived(): Int {
+        return parsedFramesReceived.get()
+    }
+
+    /**
+     * Returns the number of malformed inbound JSON frames dropped gracefully.
+     */
+    fun getMalformedFramesDropped(): Int {
+        return malformedFramesDropped.get()
+    }
+
+    /**
+     * Returns the number of oldest parsed frames evicted when the inbound queue reached capacity.
+     */
+    fun getDroppedQueuedFrames(): Int {
+        return parsedFrameQueue.droppedCount()
+    }
+
+    /**
      * Returns whether the transport is connected.
      * @return true if connected, false otherwise
      */
@@ -686,6 +782,7 @@ class WebSocketTransport(
         private const val ALREADY_CONNECTED = -1L
         private const val JOIN_IN_FLIGHT = -2L
         private const val CLOSED_TRANSPORT = -3L
+        private val NEWLINE_BYTES = ByteString.of('\n'.code.toByte())
         const val WS_PATH = "/api/ws"
         const val NORMAL_CLOSURE_CODE = 1000
         const val DEFAULT_MAX_FRAME_SIZE = 1024 * 1024 // 1MB
