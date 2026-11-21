@@ -24,8 +24,9 @@ class CancellationClient(
     suspend fun cancel(requestId: String) = withContext(Dispatchers.IO) {
         val url = buildUrl()
         val cancellationId = UUID.randomUUID().toString()
-        println("DEBUG: cancellationId = $cancellationId")
-        val body = """{"requestId":"$requestId","cancellationId":"$cancellationId"}""".toRequestBody("application/json".toMediaTypeOrNull())
+        println("DEBUG: cancellationsId = $cancellationId")
+        val body = """{"requestId":"$requestId","cancellationId":"$cancellationId"}"""
+            .toRequestBody("application/json".toMediaTypeOrNull())
         val request = Request.Builder()
             .url(url)
             .post(body)

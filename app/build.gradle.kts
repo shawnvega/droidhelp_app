@@ -59,15 +59,12 @@ android {
     }
 }
 
-tasks.withType<Test> {
-    useJUnitPlatform()
-}
-
 dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
-    implementation(libs.androidx.compose.ui.tooling.preview)
+    implementation(libs.ui.tooling.core)
+    implementation(libs.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.navigation.compose)
@@ -79,18 +76,17 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.security.crypto)
 
-    debugImplementation(libs.androidx.compose.ui.tooling)
+    debugImplementation(libs.ui.tooling.core)
     
-    testImplementation("junit:junit:4.13.2")
+    testImplementation(libs.junit4)
+    testImplementation(libs.junit.jupiter)
+    testImplementation(libs.junit.platform.launcher)
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("org.robolectric:robolectric:4.11.1")
     testImplementation("androidx.test:core:1.5.0")
-    testImplementation("org.junit.jupiter:junit-jupiter-api:5.9.3")
-    testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.9.3")
-    testRuntimeOnly("org.junit.vintage:junit-vintage-engine:5.9.3")
-    testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.9.3")
     androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.junit4)
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
 }
@@ -101,4 +97,15 @@ detekt {
     buildUponDefaultConfig = true
     ignoreFailures = false
     autoCorrect = false
+}
+
+tasks.withType<Test>().configureEach {
+    useJUnitPlatform()
+    testLogging {
+        events("failed")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.SHORT
+        showExceptions = true
+        showCauses = true
+        showStackTraces = false
+    }
 }
