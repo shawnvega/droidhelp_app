@@ -6,11 +6,15 @@ Dependencies: `gradle/libs.versions.toml` (test deps in `app/build.gradle.kts`).
 
 ## Commands & Testing (JUnit 4, Robolectric, MockWebServer, `kotlinx-coroutines-test`)
 - **Single test (use while iterating)**:
-  `./gradlew :app:testDebugUnitTest --tests "com.bighelp.droidhelp.<Package.ClassName>" --no-daemon --console=plain --warning-mode=none 2>&1 | tail -n 50`
+  `./gradlew :app:testDebugUnitTest --tests "com.bighelp.droidhelp.<Package.ClassName>" --no-daemon 2>&1 | tail -n 50`
 - **All unit tests (run once at the end)**:
-  `./gradlew test --no-daemon --console=plain --warning-mode=none 2>&1 | tail -n 50`
-- **Static analysis / full build**: `./gradlew detekt` / `./gradlew build` (note: `detekt` and `lint` fail on errors).
-- **Integration test template**: Copy imports and `MockWebServer` + `runTest` setup verbatim from `app/src/test/java/com/bighelp/droidhelp/transport/UnsupportedMethodIntegrationTest.kt`.
+  `./gradlew test --no-daemon 2>&1 | tail -n 50`
+- **Static analysis / full build**: `./gradlew detekt` / `./gradlew build` (`detekt` and `lint` fail on errors).
+- **Detekt rules (`maxIssues: 0`)**: No wildcard imports (`import foo.*`), no magic numbers in local vars/expressions (extract constants), max line length 120, max 60 lines/method, max 15 functions/class, no `GlobalScope` or `Thread.sleep`.
+- **Test templates** (in `app/src/test/java/com/bighelp/droidhelp/`):
+  - HTTP `MockWebServer` + `runTest`: `transport/HealthClientTest.kt`
+  - WebSocket `MockWebServer`: `transport/WebSocketTransportTest.kt`
+  - In-memory `FakeTransport`: `transport/UnsupportedMethodIntegrationTest.kt`
 
 ## Architecture & Source Map (`app/src/main/java/com/bighelp/droidhelp/`)
 - **Fencing Contract**: Read [docs/FENCING_CONTRACT.md](docs/FENCING_CONTRACT.md) before touching async transport, workspace, or auth fencing (`SignIn`, `Owner`, `SocketOwner`, `StaleOwnerException` in `transport/Owners.kt`).
@@ -20,4 +24,3 @@ Dependencies: `gradle/libs.versions.toml` (test deps in `app/build.gradle.kts`).
 - `platform/`: Auth (`Auth`, `BrowserAuthentication`, `SignInCallbackHandler`), `SecureStorage`, `SqliteVersionedDatabase`.
 - `session/`: Session coordination, prompt submission, streaming, event streams, submission journal.
 - `transport/`: OkHttp WebSocket transport, RPC correlation, heartbeat, reconnect policy, endpoint/capabilities/health clients, `Owners` fencing.
-- **Ignore non-Gradle files**: Root `persistence/` and `test_serialization.kt` are not in `settings.gradle.kts` and are not compiled.

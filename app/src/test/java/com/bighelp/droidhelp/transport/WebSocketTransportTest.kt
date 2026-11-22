@@ -30,11 +30,16 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.Timeout
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 
 class WebSocketTransportTest {
+
+    @get:Rule
+    val timeout: Timeout = Timeout.seconds(10)
 
     private lateinit var server: MockWebServer
     private lateinit var client: OkHttpClient

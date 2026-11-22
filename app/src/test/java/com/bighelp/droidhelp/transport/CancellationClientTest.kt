@@ -6,14 +6,21 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
+import org.junit.rules.Timeout
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
 
 class CancellationClientTest {
+    @get:Rule
+    val timeout: Timeout = Timeout.seconds(10)
+
     private lateinit var server: MockWebServer
     private lateinit var client: CancellationClient
     private lateinit var endpoint: Endpoint
@@ -44,10 +51,11 @@ class CancellationClientTest {
         val requestId = "test-request-id"
         client.cancel(requestId)
 
-        val recordedRequest = server.takeRequest()
-        assertEquals("/api/cancel", recordedRequest.path)
-        assertEquals("POST", recordedRequest.method)
-        val body = recordedRequest.body?.readUtf8() ?: ""
+        val recordedRequest = server.takeRequest(REQUEST_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        assertNotNull(recordedRequest)
+        assertEquals("/api/cancel", recordedRequest?.path)
+        assertEquals("POST", recordedRequest?.method)
+        val body = recordedRequest?.body?.readUtf8() ?: ""
         println("DEBUG: body = $body")
         // Check that both fields are present and have non-empty values
         assertTrue("Missing requestId", body.contains("\"requestId\":\"$requestId\""))
@@ -81,8 +89,13 @@ class CancellationClientTest {
 
         customClient.cancel("req-1")
 
-        val recordedRequest = server.takeRequest()
+        val recordedRequest = server.takeRequest(REQUEST_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        assertNotNull(recordedRequest)
         // Expected path: /v1/api/cancel
-        assertEquals("/v1/api/cancel", recordedRequest.path)
+        assertEquals("/v1/api/cancel", recordedRequest?.path)
+    }
+
+    companion object {
+        private const val REQUEST_TIMEOUT_SECONDS = 5L
     }
 }

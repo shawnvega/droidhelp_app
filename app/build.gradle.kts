@@ -98,6 +98,8 @@ detekt {
 }
 
 tasks.withType<Test>().configureEach {
+    timeout.set(java.time.Duration.ofMinutes(2))
+    systemProperty("kotlinx.coroutines.test.default_timeout", "10s")
     testLogging {
         events("failed")
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL

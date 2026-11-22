@@ -15,11 +15,18 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.rules.Timeout
+import java.util.concurrent.TimeUnit
 
 class CancellationIntegrationTest {
+    @get:Rule
+    val timeout: Timeout = Timeout.seconds(10)
+
     private lateinit var server: MockWebServer
     private lateinit var scope: CoroutineScope
 
@@ -96,9 +103,10 @@ class CancellationIntegrationTest {
         assertEquals(socketHandle.handleId, result.socketHandleId)
 
         // Verify the request sent to MockWebServer
-        val request = server.takeRequest()
-        assertEquals("DELETE", request.method)
-        assertEquals("/api/sessions/$runtimeSessionId", request.path)
+        val request = server.takeRequest(REQUEST_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        assertNotNull(request)
+        assertEquals("DELETE", request?.method)
+        assertEquals("/api/sessions/$runtimeSessionId", request?.path)
         
         // Verify transport state
         assertEquals(WebSocketTransport.ConnectionState.DISCONNECTED, transport.connectionState.value)
@@ -106,5 +114,9 @@ class CancellationIntegrationTest {
 
         // 5. Cleanup
         transport.close()
+    }
+
+    companion object {
+        private const val REQUEST_TIMEOUT_SECONDS = 5L
     }
 }

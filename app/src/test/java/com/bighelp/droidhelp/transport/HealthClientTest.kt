@@ -7,12 +7,19 @@ import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertThrows
+import org.junit.rules.Timeout
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 class HealthClientTest {
+    @get:Rule
+    val timeout: Timeout = Timeout.seconds(10)
+
     private lateinit var server: MockWebServer
     private lateinit var client: HealthClient
 
@@ -49,8 +56,9 @@ class HealthClientTest {
         assertEquals(null, response.gateway.capabilities.turnQueue)
         assertEquals(null, response.gateway.capabilities.turnInterrupt)
         
-        val recordedRequest = server.takeRequest()
-        assertEquals("/api/health", recordedRequest.path)
+        val recordedRequest = server.takeRequest(REQUEST_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        assertNotNull(recordedRequest)
+        assertEquals("/api/health", recordedRequest?.path)
     }
 
     @Test
@@ -188,5 +196,9 @@ class HealthClientTest {
         assertThrows(IOException::class.java) {
             kotlinx.coroutines.runBlocking { client.getHealth() }
         }
+    }
+
+    companion object {
+        private const val REQUEST_TIMEOUT_SECONDS = 5L
     }
 }
