@@ -64,7 +64,7 @@ class SubmissionJournal(private val db: VersionedDatabase) : Journal {
      * Dispatches an intent.
      */
     override suspend fun dispatch(entryId: String): Entry = mutex.withLock {
-        val entry = getInternal(entryId) ?: throw IllegalArgumentException("Entry not found: $entryId")
+        val entry = db.retrieveEntry(entryId) ?: throw IllegalArgumentException("Entry not found: $entryId")
         if (entry.state != State.PREPARED) {
             throw IllegalStateTransitionException("Cannot dispatch from state ${entry.state}")
         }
@@ -80,7 +80,7 @@ class SubmissionJournal(private val db: VersionedDatabase) : Journal {
      * Acknowledges an intent.
      */
     override suspend fun acknowledge(entryId: String): Entry = mutex.withLock {
-        val entry = getInternal(entryId) ?: throw IllegalArgumentException("Entry not found: $entryId")
+        val entry = db.retrieveEntry(entryId) ?: throw IllegalArgumentException("Entry not found: $entryId")
         if (entry.state != State.DISPATCHED) {
             throw IllegalStateTransitionException("Cannot acknowledge from state ${entry.state}")
         }
@@ -96,7 +96,7 @@ class SubmissionJournal(private val db: VersionedDatabase) : Journal {
      * Marks an intent as uncertain.
      */
     override suspend fun markUncertain(entryId: String, reason: String): Entry = mutex.withLock {
-        val entry = getInternal(entryId) ?: throw IllegalArgumentException("Entry not found: $entryId")
+        val entry = db.retrieveEntry(entryId) ?: throw IllegalArgumentException("Entry not found: $entryId")
         val updatedMetadata = (entry.metadata ?: emptyMap()) + ("reason" to reason)
         val updatedEntry = entry.copy(
             state = State.UNCERTAIN,
@@ -110,14 +110,14 @@ class SubmissionJournal(private val db: VersionedDatabase) : Journal {
     /**
      * Retrieves an entry by ID.
      */
-    override suspend fun get(entryId: String): Entry? = mutex.withLock { getInternal(entryId) }
+    override suspend fun get(entryId: String): Entry? = mutex.withLock { db.retrieveEntry(entryId) }
 
     /**
      * Queries entries by state.
      */
     override suspend fun query(state: State?): List<Entry> = mutex.withLock {
         db.listKeys().mapNotNull { id ->
-            val entry = getInternal(id)
+            val entry = db.retrieveEntry(id)
             if (state == null || (entry != null && entry.state == state)) entry else null
         }
     }
@@ -139,19 +139,22 @@ class SubmissionJournal(private val db: VersionedDatabase) : Journal {
         entry
     }
 
-    override suspend fun queryByVersion(entryId: String, startVersion: Int, endVersion: Int): List<Entry> = mutex.withLock {
+    override suspend fun queryByVersion(
+        entryId: String,
+        startVersion: Int,
+        endVersion: Int,
+    ): List<Entry> = mutex.withLock {
         db.queryByVersion(entryId, startVersion, endVersion).map { Entry.fromCsv(it) }
     }
 
     override suspend fun prune(retentionPolicy: (Instant) -> Boolean) = mutex.withLock {
         val keysToRemove = db.listKeys().filter { id ->
-            val entry = getInternal(id)
+            val entry = db.retrieveEntry(id)
             entry != null && retentionPolicy(entry.timestamp)
         }
         keysToRemove.forEach { db.delete(it) }
     }
-
-    private fun getInternal(id: String): Entry? {
-        return db.retrieve(id)?.let { Entry.fromCsv(it) }
-    }
 }
+
+private fun VersionedDatabase.retrieveEntry(id: String): Entry? =
+    retrieve(id)?.let { Entry.fromCsv(it) }

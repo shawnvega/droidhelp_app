@@ -1,3 +1,5 @@
+import java.time.Duration
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -98,7 +100,7 @@ detekt {
 }
 
 tasks.withType<Test>().configureEach {
-    timeout.set(java.time.Duration.ofMinutes(2))
+    timeout.set(Duration.ofMinutes(2))
     systemProperty("kotlinx.coroutines.test.default_timeout", "10s")
     testLogging {
         events("failed")

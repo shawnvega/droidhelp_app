@@ -2,6 +2,7 @@ package com.bighelp.droidhelp.chat
 
 import androidx.lifecycle.ViewModel
 import com.bighelp.droidhelp.platform.HttpClient
+import com.bighelp.droidhelp.platform.UploadPayload
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -18,7 +19,7 @@ import okhttp3.Response
 
 class FakeHttpClient : HttpClient {
     override suspend fun post(url: String, body: Map<String, String>): Response = TODO()
-    override suspend fun upload(url: String, name: String, fileName: String, mimeType: String, data: ByteArray, onProgress: (Float) -> Unit): Response = TODO()
+    override suspend fun upload(payload: UploadPayload, onProgress: (Float) -> Unit): Response = TODO()
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -41,7 +42,7 @@ class ChatViewModelTest {
         // We need a dummy HttpClient to satisfy the constructor
         val httpClient = object : HttpClient {
             override suspend fun post(url: String, body: Map<String, String>): Response = TODO()
-            override suspend fun upload(url: String, name: String, fileName: String, mimeType: String, data: ByteArray, onProgress: (Float) -> Unit): Response = TODO()
+            override suspend fun upload(payload: UploadPayload, onProgress: (Float) -> Unit): Response = TODO()
         }
         val viewModel = ChatViewModel(httpClient)
         viewModel.onInputChange("hello")
@@ -52,7 +53,7 @@ class ChatViewModelTest {
     fun `send with blank input is a no-op`() = runTest {
         val httpClient = object : HttpClient {
             override suspend fun post(url: String, body: Map<String, String>): Response = TODO()
-            override suspend fun upload(url: String, name: String, fileName: String, mimeType: String, data: ByteArray, onProgress: (Float) -> Unit): Response = TODO()
+            override suspend fun upload(payload: UploadPayload, onProgress: (Float) -> Unit): Response = TODO()
         }
         val viewModel = ChatViewModel(httpClient, onSendMessage = { _, _ -> })
         
@@ -67,7 +68,7 @@ class ChatViewModelTest {
     fun `send appends message and clears input`() = runTest {
         val httpClient = object : HttpClient {
             override suspend fun post(url: String, body: Map<String, String>): Response = TODO()
-            override suspend fun upload(url: String, name: String, fileName: String, mimeType: String, data: ByteArray, onProgress: (Float) -> Unit): Response = TODO()
+            override suspend fun upload(payload: UploadPayload, onProgress: (Float) -> Unit): Response = TODO()
         }
         val viewModel = ChatViewModel(httpClient)
         viewModel.onInputChange("Hello World")
@@ -87,7 +88,7 @@ class ChatViewModelTest {
         var sentText = ""
         val httpClient = object : HttpClient {
             override suspend fun post(url: String, body: Map<String, String>): Response = TODO()
-            override suspend fun upload(url: String, name: String, fileName: String, mimeType: String, data: ByteArray, onProgress: (Float) -> Unit): Response = TODO()
+            override suspend fun upload(payload: UploadPayload, onProgress: (Float) -> Unit): Response = TODO()
         }
         val viewModel = ChatViewModel(httpClient, onSendMessage = { text, _ ->
             sentText = text

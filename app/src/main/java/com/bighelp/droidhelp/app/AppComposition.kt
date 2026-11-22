@@ -1,12 +1,16 @@
 package com.bighelp.droidhelp.app
 
-import androidx.compose.runtime.*
-import com.bighelp.droidhelp.chat.*
-import com.bighelp.droidhelp.home.model.HomeSelection
-import kotlinx.coroutines.delay
-import com.bighelp.droidhelp.platform.HttpClient
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import com.bighelp.droidhelp.chat.ChatScreen
+import com.bighelp.droidhelp.chat.ChatViewModel
 import com.bighelp.droidhelp.platform.OkHttpClientImpl
+import kotlinx.coroutines.delay
 import okhttp3.OkHttpClient
+
+private const val REASONING_DELAY_MS = 1000L
+private const val MESSAGE_DELAY_MS = 500L
 
 @Composable
 fun AppComposition(appState: AppState) {
@@ -16,11 +20,11 @@ fun AppComposition(appState: AppState) {
     LaunchedEffect(chatViewModel) {
         // Simulate the sequence of events directly on the VM
         chatViewModel.startReasoning("Thinking...")
-        delay(1000)
+        delay(REASONING_DELAY_MS)
         chatViewModel.updateReasoning("This is a thought process.")
         chatViewModel.finishReasoning()
         
-        delay(500)
+        delay(MESSAGE_DELAY_MS)
         chatViewModel.appendAssistantMessage("Hello! I have listed the files for you.")
     }
 

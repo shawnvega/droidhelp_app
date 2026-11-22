@@ -30,7 +30,7 @@ class CancellationIntegrationTest {
 
     private lateinit var server: MockWebServer
     private lateinit var scope: CoroutineScope
-    private var transport: WebSocketTransport? = null
+    private var t: WebSocketTransport? = null
 
     @Before
     fun setup() {
@@ -41,7 +41,7 @@ class CancellationIntegrationTest {
 
     @After
     fun teardown() {
-        transport?.close()
+        t?.close()
         server.shutdown()
         scope.cancel()
     }
@@ -64,23 +64,23 @@ class CancellationIntegrationTest {
         server.enqueue(MockResponse().setResponseCode(200))
 
         // 2. Connect WebSocketTransport and create Session
-        val transport = WebSocketTransport.create(endpoint, scope = scope)
-        this.transport = transport
+        val newTransport = WebSocketTransport.create(endpoint, scope = scope)
+        this.t = newTransport
         
         // Start the connection process
-        val connectionJob = launch { transport.connect() }
-
+        val connectionJob = launch { newTransport.connect() }
+        
         // Wait for connection to be established
         try {
             withTimeout(5000) {
-                while (transport.connectionState.value != WebSocketTransport.ConnectionState.CONNECTED) {
+                while (newTransport.connectionState.value != WebSocketTransport.ConnectionState.CONNECTED) {
                     delay(50)
-                    println("DEBUG: Current state: ${transport.connectionState.value}")
+                    println("DEBUG: Current state: ${newTransport.connectionState.value}")
                 }
             }
         } catch (e: TimeoutCancellationException) {
-            println("DEBUG: Connection timed out. Current state: ${transport.connectionState.value}")
-            println("DEBUG: Connection error: ${transport.getConnectionError()}")
+            println("DEBUG: Connection timed out. Current state: ${newTransport.connectionState.value}")
+            println("DEBUG: Connection error: ${newTransport.getConnectionError()}")
             throw e
         }
         connectionJob.join()
@@ -95,7 +95,7 @@ class CancellationIntegrationTest {
         val cancellation = SessionCancellation(httpClient, endpoint)
 
         // Get the handle from the transport via the cancellation object
-        val socketHandle = cancellation.createSocketHandle(session, transport = transport)
+        val socketHandle = cancellation.createSocketHandle(session, transport = newTransport)
 
         // 3. Call cancelSession with SocketHandle
         val result = cancellation.cancelSession(session, socketHandle)
@@ -116,12 +116,12 @@ class CancellationIntegrationTest {
         assertEquals("/api/sessions/$runtimeSessionId?profile=$profile", request?.path)
         
         // Verify transport state
-        assertEquals(WebSocketTransport.ConnectionState.DISCONNECTED, transport.connectionState.value)
-        assertFalse(transport.isClosed())
+        assertEquals(WebSocketTransport.ConnectionState.DISCONNECTED, newTransport.connectionState.value)
+        assertFalse(newTransport.isClosed())
 
         // 5. Cleanup
-        transport.close()
-        assertTrue(transport.isClosed())
+        newTransport.close()
+        assertTrue(newTransport.isClosed())
     }
 
     companion object {
