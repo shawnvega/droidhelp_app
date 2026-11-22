@@ -1,41 +1,23 @@
 # droidhelp
 
-Android client built with Jetpack Compose, Kotlin, OkHttp, and Kotlin Serialization.
+Android client (Kotlin 2.1.10, Java 17, AGP 8.7.0, `minSdk = 26`, `targetSdk = 35`).
+Stack: Jetpack Compose (Material 3), Coroutines, OkHttp, `kotlinx.serialization.json`, DataStore, `AndroidSecureStorage`, SQLite (`SqliteVersionedDatabase`).
+Dependencies: `gradle/libs.versions.toml` (test deps in `app/build.gradle.kts`).
 
-## Setup & Build
-- **Build**: `./gradlew build`
-- **Deploy to device/emulator**: `./gradlew installDebug`
-- **SDK & Toolchain**: `minSdk = 26`, `compileSdk = 35`, `targetSdk = 35`, Java 17, Kotlin `2.1.10`, AGP `8.7.0`.
-- **Dependencies**: Managed in `gradle/libs.versions.toml` (test dependencies are declared in `app/build.gradle.kts`).
+## Commands & Testing (JUnit 4, Robolectric, MockWebServer, `kotlinx-coroutines-test`)
+- **Single test (use while iterating)**:
+  `./gradlew :app:testDebugUnitTest --tests "com.bighelp.droidhelp.<Package.ClassName>" --no-daemon --console=plain --warning-mode=none 2>&1 | tail -n 50`
+- **All unit tests (run once at the end)**:
+  `./gradlew test --no-daemon --console=plain --warning-mode=none 2>&1 | tail -n 50`
+- **Static analysis / full build**: `./gradlew detekt` / `./gradlew build` (note: `detekt` and `lint` fail on errors).
+- **Integration test template**: Copy imports and `MockWebServer` + `runTest` setup verbatim from `app/src/test/java/com/bighelp/droidhelp/transport/UnsupportedMethodIntegrationTest.kt`.
 
-## Testing
-- **Run all unit tests**: `./gradlew test`
-- **Run a single unit test**: `./gradlew :app:testDebugUnitTest --tests "com.bighelp.droidhelp.<ClassName>"`
-- **Run Android instrumentation tests**: `./gradlew connectedAndroidTest`
-- **Test Stack**: Configured with JUnit 4 (`junit:junit:4.13.2`), alongside Robolectric, MockWebServer, and `kotlinx-coroutines-test`.
-- **Integration Test Boilerplate**: When writing `MockWebServer` / coroutine integration tests, copy imports and setup verbatim from `app/src/test/java/com/bighelp/droidhelp/transport/UnsupportedMethodIntegrationTest.kt` (JUnit 4 `org.junit.Test`, `org.junit.Assert.*`, `okhttp3.mockwebserver.*`, `kotlinx.coroutines.test.runTest`, `kotlinx.coroutines.withTimeoutOrNull`).
-- **Iteration Workflow**: Iterate on a single class with `./gradlew :app:testDebugUnitTest --tests "com.bighelp.droidhelp.<ClassName>" --no-daemon --console=plain --warning-mode=none 2>&1 | tail -n 50`, and run full `./gradlew test --no-daemon --console=plain --warning-mode=none 2>&1 | tail -n 50` only once at the end.
-- **Debugging Failures**: Console output omits stack traces (`showStackTraces = false`). When a test fails, read `app/build/test-results/testDebugUnitTest/TEST-com.bighelp.droidhelp.<ClassName>.xml` for the full stack trace and stdout/stderr instead of re-running Gradle with `--info` or `--stacktrace`.
-
-## Code Style & Conventions
-- **Stack**: Android, Jetpack Compose (Material 3), Kotlin Coroutines.
-- **Serialization**: Use `kotlinx.serialization` (`kotlinx.serialization.json`) for JSON handling.
-- **Conventions**: Follow standard Android and Kotlin coding guidelines; keep existing comments and docstrings intact.
-
-## Architecture & Contracts
-- **Fencing Contract**: See [docs/FENCING_CONTRACT.md](docs/FENCING_CONTRACT.md) for the `SignIn` / `Owner` / `SocketOwner` fencing rules (`Owners.kt`, `StaleOwnerException`) governing async transport, workspace, and authentication operations.
-- **Networking**: `OkHttp` for HTTP and WebSocket transport (`transport/`).
-- **Persistence & Security**: `androidx.security:security-crypto` (`AndroidSecureStorage`), `androidx.datastore:datastore-preferences`, and SQLite (`SqliteVersionedDatabase`).
-
-## Project Structure
-- `app/`: Main Android application module (the only Gradle module in `settings.gradle.kts`).
-  - `app/src/main/java/com/bighelp/droidhelp/`:
-    - `app/`: Application entry point and composition (`DroidHelpApp`, `AppComposition`).
-    - `home/` & `home/model/`: Compose screens (`WorkView`, `ChatsInboxView`, `SearchScreen`), `WorkViewModel`, and navigation/UI models.
-    - `chat/`: Chat UI models and performance utilities.
-    - `designsystem/`: Compose theme and typography.
-    - `platform/`: Authentication (`Auth`, `BrowserAuthentication`, `SignInCallbackHandler`), secure storage (`SecureStorage`, `AndroidSecureStorage`), and SQLite database (`VersionedDatabase`, `SqliteVersionedDatabase`).
-    - `session/`: Session coordination, prompt submission, streaming, event streams, and submission journaling.
-    - `transport/`: WebSocket transport, RPC correlation, heartbeat, reconnect policy, endpoint/capabilities/health clients, and `Owners` fencing.
-- `docs/`: Architecture and contract documentation (including `FENCING_CONTRACT.md`).
-- **Non-Gradle files**: Root `persistence/` (a standalone Room prototype) and `test_serialization.kt` are not included in `settings.gradle.kts` or `app/build.gradle.kts` and are not compiled by Gradle.
+## Architecture & Source Map (`app/src/main/java/com/bighelp/droidhelp/`)
+- **Fencing Contract**: Read [docs/FENCING_CONTRACT.md](docs/FENCING_CONTRACT.md) before touching async transport, workspace, or auth fencing (`SignIn`, `Owner`, `SocketOwner`, `StaleOwnerException` in `transport/Owners.kt`).
+- `app/`: Entry point & DI (`DroidHelpApp`, `AppComposition`).
+- `home/` & `home/model/`: Screens (`WorkView`, `ChatsInboxView`, `SearchScreen`), `WorkViewModel`, UI models.
+- `chat/` & `designsystem/`: Chat UI models/perf utilities; Compose theme & typography.
+- `platform/`: Auth (`Auth`, `BrowserAuthentication`, `SignInCallbackHandler`), `SecureStorage`, `SqliteVersionedDatabase`.
+- `session/`: Session coordination, prompt submission, streaming, event streams, submission journal.
+- `transport/`: OkHttp WebSocket transport, RPC correlation, heartbeat, reconnect policy, endpoint/capabilities/health clients, `Owners` fencing.
+- **Ignore non-Gradle files**: Root `persistence/` and `test_serialization.kt` are not in `settings.gradle.kts` and are not compiled.
