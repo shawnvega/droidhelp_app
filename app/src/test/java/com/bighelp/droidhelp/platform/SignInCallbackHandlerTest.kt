@@ -33,6 +33,28 @@ class SignInCallbackHandlerTest {
                 .body(responseBody)
                 .build()
         }
+
+        override suspend fun upload(
+            url: String,
+            name: String,
+            fileName: String,
+            mimeType: String,
+            data: ByteArray,
+            onProgress: (Float) -> Unit
+        ): Response {
+            onProgress(1f)
+            val responseBody = ResponseBody.create(
+                "application/octet-stream".toMediaTypeOrNull(),
+                ""
+            )
+            return Response.Builder()
+                .request(Request.Builder().url(url).build())
+                .protocol(Protocol.HTTP_1_1)
+                .code(200)
+                .message("OK")
+                .body(responseBody)
+                .build()
+        }
     }
 
     @Test
@@ -230,6 +252,24 @@ class SignInCallbackHandlerTest {
                     .body(ResponseBody.create("application/json".toMediaTypeOrNull(), ""))
                     .build()
             }
+
+            override suspend fun upload(
+                url: String,
+                name: String,
+                fileName: String,
+                mimeType: String,
+                data: ByteArray,
+                onProgress: (Float) -> Unit
+            ): Response {
+                onProgress(1f)
+                return Response.Builder()
+                    .request(Request.Builder().url(url).build())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(500)
+                    .message("Internal Server Error")
+                    .body(ResponseBody.create("application/json".toMediaTypeOrNull(), ""))
+                    .build()
+            }
         }
         val handler = SignInCallbackHandler(auth, httpClient, "http://localhost:8080/auth/callback")
 
@@ -253,6 +293,24 @@ class SignInCallbackHandlerTest {
         val auth = Auth(FakeSecureStorage())
         val httpClient = object : HttpClient {
             override suspend fun post(url: String, body: Map<String, String>): Response {
+                return Response.Builder()
+                    .request(Request.Builder().url(url).build())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .body(ResponseBody.create("application/json".toMediaTypeOrNull(), ""))
+                    .build()
+            }
+
+            override suspend fun upload(
+                url: String,
+                name: String,
+                fileName: String,
+                mimeType: String,
+                data: ByteArray,
+                onProgress: (Float) -> Unit
+            ): Response {
+                onProgress(1f)
                 return Response.Builder()
                     .request(Request.Builder().url(url).build())
                     .protocol(Protocol.HTTP_1_1)

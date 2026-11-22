@@ -15,37 +15,13 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.json.Json
 
 /**
- * Interface for making HTTP requests.
- */
-interface HttpClient {
-    suspend fun post(url: String, body: Map<String, String>): Response
-}
-
-/**
- * Simple OkHttp-based HTTP client implementation.
- */
-class OkHttpClientImpl(private val httpClient: OkHttpClient) : HttpClient {
-
-    override suspend fun post(url: String, body: Map<String, String>): Response = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-        val requestBody = body.entries.joinToString("&") { "${java.net.URLEncoder.encode(it.key, "UTF-8")}=${java.net.URLEncoder.encode(it.value, "UTF-8")}" }
-        val mediaType = "application/x-www-form-urlencoded".toMediaTypeOrNull()
-        val requestBodyObj = requestBody.toRequestBody(mediaType)
-        val request = Request.Builder()
-            .url(url)
-            .post(requestBodyObj)
-            .build()
-        httpClient.newCall(request).execute()
-    }
-}
-
-/**
  * Handles the complete sign-in callback flow for OAuth with PKCE.
  *
  * This class integrates all components into the sign-in callback handler:
  * - Parses the authorization response from the callback URL
  * - Validates state to prevent CSRF attacks
  * - Validates loopback redirect URI
- * - Exchanges the authorization code using PKCE (sends code_verifier)
+ * - Exchanges the authorization code using PKCE
  * - Stores tokens including refresh token
  * - Handles errors gracefully
  *

@@ -1,5 +1,7 @@
 package com.bighelp.droidhelp.session
 
+import com.bighelp.droidhelp.platform.VersionedDatabase
+import com.bighelp.droidhelp.platform.FileBasedVersionedDatabase
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
@@ -8,100 +10,148 @@ import java.util.UUID
 
 /**
  * A journal that persists submission intent before dispatch.
- * Ensures thread-safety and provides state machine enforcement.
  */
-class SubmissionJournal(
-    private val storageFile: File? = null
-) {
+class SubmissionJournal(private val db: VersionedDatabase) : Journal {
+
     private val mutex = Mutex()
-    private var entries = mutableMapOf<String, Entry>()
 
-    init {
-        storageFile?.let {
-            if (it.exists()) {
-                try {
-                    val lines = it.readLines()
-                    entries = lines.filter { line -> line.isNotBlank() }
-                        .map { Entry.fromCsv(it) }
-                        .associateBy { it.id }
-                        .toMutableMap()
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            }
-        }
-    }
+    /**
+     * For backward compatibility with existing tests.
+     */
+    constructor(storageFile: File) : this(FileBasedVersionedDatabase(storageFile))
 
-    private suspend fun save() {
-        storageFile?.let {
-            val content = entries.values.joinToString("\n") { it.toCsv() }
-            it.writeText(content)
-        }
-    }
+    // --- Small API requested by task ---
 
+    /**
+     * Records a new submission intent.
+     */
+    suspend fun recordIntent(intent: String): Entry = prepare(intent)
+
+    /**
+     * Marks an intent as dispatched.
+     */
+    suspend fun markDispatched(entryId: String): Entry = dispatch(entryId)
+
+    /**
+     * Marks an intent as acknowledged.
+     */
+    suspend fun markAcknowledged(entryId: String): Entry = acknowledge(entryId)
+
+    /**
+     * Lists all pending intents (not yet acknowledged).
+     */
+    suspend fun listPending(): List<Entry> = query(null).filter { it.state != State.ACKNOWLEDGED }
+
+    // --- Existing API (used by tests and potentially others) ---
+
+    /**
+     * Prepares a new intent.
+     */
     suspend fun prepare(intent: String): Entry = mutex.withLock {
+        val id = UUID.randomUUID().toString()
         val entry = Entry(
-            id = UUID.randomUUID().toString(),
+            id = id,
             intent = intent,
             state = State.PREPARED,
             timestamp = Instant.now(),
             metadata = null
         )
-        entries[entry.id] = entry
-        save()
+        db.insert(id, entry.toCsv())
         entry
     }
 
-    suspend fun dispatch(entryId: String): Entry = mutex.withLock {
-        val entry = entries[entryId] ?: throw IllegalArgumentException("Entry not found: $entryId")
+    /**
+     * Dispatches an intent.
+     */
+    override suspend fun dispatch(entryId: String): Entry = mutex.withLock {
+        val entry = getInternal(entryId) ?: throw IllegalArgumentException("Entry not found: $entryId")
         if (entry.state != State.PREPARED) {
             throw IllegalStateTransitionException("Cannot dispatch from state ${entry.state}")
         }
         val updatedEntry = entry.copy(
             state = State.DISPATCHED,
-            timestamp = Instant.now(),
+            timestamp = Instant.now()
         )
-        entries[entryId] = updatedEntry
-        save()
+        db.insert(entryId, updatedEntry.toCsv())
         updatedEntry
     }
 
-    suspend fun acknowledge(entryId: String): Entry = mutex.withLock {
-        val entry = entries[entryId] ?: throw IllegalArgumentException("Entry not found: $entryId")
+    /**
+     * Acknowledges an intent.
+     */
+    override suspend fun acknowledge(entryId: String): Entry = mutex.withLock {
+        val entry = getInternal(entryId) ?: throw IllegalArgumentException("Entry not found: $entryId")
         if (entry.state != State.DISPATCHED) {
             throw IllegalStateTransitionException("Cannot acknowledge from state ${entry.state}")
         }
         val updatedEntry = entry.copy(
             state = State.ACKNOWLEDGED,
-            timestamp = Instant.now(),
+            timestamp = Instant.now()
         )
-        entries[entryId] = updatedEntry
-        save()
+        db.insert(entryId, updatedEntry.toCsv())
         updatedEntry
     }
 
-    suspend fun markUncertain(entryId: String, reason: String): Entry = mutex.withLock {
-        val entry = entries[entryId] ?: throw IllegalArgumentException("Entry not found: $entryId")
+    /**
+     * Marks an intent as uncertain.
+     */
+    override suspend fun markUncertain(entryId: String, reason: String): Entry = mutex.withLock {
+        val entry = getInternal(entryId) ?: throw IllegalArgumentException("Entry not found: $entryId")
         val updatedMetadata = (entry.metadata ?: emptyMap()) + ("reason" to reason)
         val updatedEntry = entry.copy(
             state = State.UNCERTAIN,
             timestamp = Instant.now(),
             metadata = updatedMetadata
         )
-        entries[entryId] = updatedEntry
-        save()
+        db.insert(entryId, updatedEntry.toCsv())
         updatedEntry
     }
 
-    suspend fun get(entryId: String): Entry? = mutex.withLock {
-        entries[entryId]
+    /**
+     * Retrieves an entry by ID.
+     */
+    override suspend fun get(entryId: String): Entry? = mutex.withLock { getInternal(entryId) }
+
+    /**
+     * Queries entries by state.
+     */
+    override suspend fun query(state: State?): List<Entry> = mutex.withLock {
+        db.listKeys().mapNotNull { id ->
+            val entry = getInternal(id)
+            if (state == null || (entry != null && entry.state == state)) entry else null
+        }
     }
 
-    suspend fun query(state: State?): List<Entry> = mutex.withLock {
-        if (state == null) {
-            entries.values.toList()
-        } else {
-            entries.values.filter { it.state == state }
+    // --- Journal Interface Implementation ---
+
+    override suspend fun appendIntent(intent: String): Entry = prepare(intent)
+
+    override suspend fun appendHistory(history: String): Entry = mutex.withLock {
+        val id = UUID.randomUUID().toString()
+        val entry = Entry(
+            id = id,
+            intent = history,
+            state = State.HISTORY,
+            timestamp = Instant.now(),
+            metadata = null
+        )
+        db.insert(id, entry.toCsv())
+        entry
+    }
+
+    override suspend fun queryByVersion(entryId: String, startVersion: Int, endVersion: Int): List<Entry> = mutex.withLock {
+        db.queryByVersion(entryId, startVersion, endVersion).map { Entry.fromCsv(it) }
+    }
+
+    override suspend fun prune(retentionPolicy: (Instant) -> Boolean) = mutex.withLock {
+        val keysToRemove = db.listKeys().filter { id ->
+            val entry = getInternal(id)
+            entry != null && retentionPolicy(entry.timestamp)
         }
+        keysToRemove.forEach { db.delete(it) }
+    }
+
+    private fun getInternal(id: String): Entry? {
+        return db.retrieve(id)?.let { Entry.fromCsv(it) }
     }
 }

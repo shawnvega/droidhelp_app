@@ -25,6 +25,16 @@ class ChatPerformance {
     }
 
     /**
+     * Updates an existing item in the history.
+     *
+     * @param id The ID of the item to update.
+     * @param item The updated [TimelineItem].
+     */
+    fun update(id: String, item: TimelineItem) {
+        historyMap[id] = item
+    }
+
+    /**
      * Returns the current history as an ordered list of [TimelineItem]s.
      *
      * @return An ordered list of the chat history.
@@ -44,6 +54,7 @@ class ChatPerformance {
 
     /**
      * Clears all items from the history.
+     *
      */
     fun clear() {
         historyMap.clear()

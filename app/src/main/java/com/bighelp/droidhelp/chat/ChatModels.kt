@@ -40,18 +40,24 @@ data class TimelineSender(
 
 sealed class TimelineContent {
     data class Message(val text: String) : TimelineContent()
+    data class Reasoning(val text: String) : TimelineContent()
+    enum class ToolCallStatus {
+        RUNNING, SUCCESS, ERROR
+    }
+
+    data class ToolCall(
+        val name: String,
+        val arguments: String,
+        val result: String? = null,
+        val status: ToolCallStatus = ToolCallStatus.RUNNING
+    ) : TimelineContent()
 }
 
 data class TimelineMetadata(
     val timestamp: Date? = null,
     val sourceOrder: Int? = null,
-    val isInterimReply: Boolean = false
-)
-
-data class ChatAttachment(
-    val id: String,
-    val fileName: String,
-    val mimeType: String
+    val isInterimReply: Boolean = false,
+    val isStreaming: Boolean = false
 )
 
 data class TimelineItem(
