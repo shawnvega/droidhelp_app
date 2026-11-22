@@ -6,9 +6,9 @@ Dependencies: `gradle/libs.versions.toml` (test deps in `app/build.gradle.kts`).
 
 ## Commands & Testing (JUnit 4, Robolectric, MockWebServer, `kotlinx-coroutines-test`)
 - **Single test (use while iterating)**:
-  `./gradlew :app:testDebugUnitTest --tests "com.bighelp.droidhelp.<Package.ClassName>" --no-daemon 2>&1 | tail -n 50`
+  `./gradlew :app:testDebugUnitTest --tests "com.bighelp.droidhelp.<Package.ClassName>" --no-daemon 2>&1 | tail -n 80`
 - **All unit tests (run once at the end)**:
-  `./gradlew test --no-daemon 2>&1 | tail -n 50`
+  `./gradlew test --no-daemon 2>&1 | tail -n 80`
 - **Static analysis / full build**: `./gradlew detekt` / `./gradlew build` (`detekt` and `lint` fail on errors).
 - **Detekt rules (`maxIssues: 0`)**: No wildcard imports (`import foo.*`), no magic numbers in local vars/expressions (extract constants), max line length 120, max 60 lines/method, max 15 functions/class, no `GlobalScope` or `Thread.sleep`.
 - **Test templates** (in `app/src/test/java/com/bighelp/droidhelp/`):
