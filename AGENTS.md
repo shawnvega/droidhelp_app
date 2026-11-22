@@ -14,7 +14,8 @@ Android client built with Jetpack Compose, Kotlin, OkHttp, and Kotlin Serializat
 - **Run Android instrumentation tests**: `./gradlew connectedAndroidTest`
 - **Test Stack**: Configured with JUnit 4 (`junit:junit:4.13.2`), alongside Robolectric, MockWebServer, and `kotlinx-coroutines-test`.
 - **Integration Test Boilerplate**: When writing `MockWebServer` / coroutine integration tests, copy imports and setup verbatim from `app/src/test/java/com/bighelp/droidhelp/transport/UnsupportedMethodIntegrationTest.kt` (JUnit 4 `org.junit.Test`, `org.junit.Assert.*`, `okhttp3.mockwebserver.*`, `kotlinx.coroutines.test.runTest`, `kotlinx.coroutines.withTimeoutOrNull`).
-- **Iteration Workflow**: Pass `--no-daemon --console=plain --warning-mode=none -q` (or `| tail -n 50` without `-q` for test summaries) to `./gradlew`, iterate with `--tests "com.bighelp.droidhelp.<ClassName>"`, and run full `./gradlew test --no-daemon --console=plain --warning-mode=none | tail -n 50` only once at the end.
+- **Iteration Workflow**: Iterate on a single class with `./gradlew :app:testDebugUnitTest --tests "com.bighelp.droidhelp.<ClassName>" --no-daemon --console=plain --warning-mode=none 2>&1 | tail -n 50`, and run full `./gradlew test --no-daemon --console=plain --warning-mode=none 2>&1 | tail -n 50` only once at the end.
+- **Debugging Failures**: Console output omits stack traces (`showStackTraces = false`). When a test fails, read `app/build/test-results/testDebugUnitTest/TEST-com.bighelp.droidhelp.<ClassName>.xml` for the full stack trace and stdout/stderr instead of re-running Gradle with `--info` or `--stacktrace`.
 
 ## Code Style & Conventions
 - **Stack**: Android, Jetpack Compose (Material 3), Kotlin Coroutines.
