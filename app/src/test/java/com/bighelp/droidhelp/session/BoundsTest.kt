@@ -1,17 +1,26 @@
 package com.bighelp.droidhelp.session
 
-import org.junit.jupiter.api.Assertions.assertDoesNotThrow
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertNotEquals
-import org.junit.jupiter.api.Assertions.assertThrows
-import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.Nested
-import org.junit.jupiter.api.Test
+import org.junit.experimental.runners.Enclosed
+import org.junit.runner.RunWith
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Test
 
+private inline fun assertDoesNotThrow(block: () -> Unit) {
+    try {
+        block()
+    } catch (e: Throwable) {
+        org.junit.Assert.fail("Expected no exception but caught: $e")
+    }
+}
+
+@RunWith(Enclosed::class)
 class BoundsTest {
 
-    @Nested
-    inner class Utf8ByteLimitTests {
+    
+    class Utf8ByteLimitTests {
 
         @Test
         fun `default max utf8 bytes constant is 1024`() {
@@ -178,8 +187,8 @@ class BoundsTest {
         }
     }
 
-    @Nested
-    inner class IntBoundsTests {
+    
+    class IntBoundsTests {
 
         @Test
         fun `allows normal and boundary values within default 32-bit int bounds`() {
@@ -366,8 +375,8 @@ class BoundsTest {
         }
     }
 
-    @Nested
-    inner class EnsureIdNotNormalizedTests {
+    
+    class EnsureIdNotNormalizedTests {
 
         @Test
         fun `preserves mixed case without case folding`() {

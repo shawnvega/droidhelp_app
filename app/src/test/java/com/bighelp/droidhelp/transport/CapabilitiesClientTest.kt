@@ -2,8 +2,8 @@ package com.bighelp.droidhelp.transport
 
 import com.bighelp.droidhelp.session.Session
 import kotlinx.coroutines.test.runTest
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Test
+import org.junit.Assert.assertEquals
+import org.junit.Test
 
 class CapabilitiesClientTest {
 

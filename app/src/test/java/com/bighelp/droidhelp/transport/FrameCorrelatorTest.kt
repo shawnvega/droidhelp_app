@@ -8,12 +8,12 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonPrimitive
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertNotNull
-import org.junit.jupiter.api.Assertions.assertNull
-import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.Test
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
@@ -27,12 +27,12 @@ class FrameCorrelatorTest {
 
     private fun parseFrame(rawJson: String): ParsedJsonFrame {
         val result = decoder.decode("$rawJson\n")
-        assertEquals(1, result.frames.size, "Expected single parsed frame for: $rawJson")
+        assertEquals("Expected single parsed frame for: $rawJson", 1, result.frames.size)
         return result.frames.single()
     }
 
     @Test
-    fun testCorrelatesJsonRpcSuccessNullResultAndErrorFrames() = runBlocking {
+    fun testCorrelatesJsonRpcSuccessNullResultAndErrorFrames() : Unit = runBlocking {
         val correlator = FrameCorrelator()
         val listenerEvents = Collections.synchronizedList(mutableListOf<CorrelationEvent>())
         val perRequestEvents = Collections.synchronizedList(mutableListOf<CorrelationEvent>())
@@ -252,7 +252,7 @@ class FrameCorrelatorTest {
         startGate.countDown()
         racers.forEach { it.join(TEST_TIMEOUT_MS) }
 
-        assertFalse(duplicateDetected.get(), "A request ID must never emit duplicate correlation events")
+        assertFalse("A request ID must never emit duplicate correlation events", duplicateDetected.get())
         assertEquals(0, correlator.pendingCount())
         assertEquals(seenIds.size, emittedCounter.get())
         assertEquals(seenIds.size, correlator.correlatedCount)
@@ -302,7 +302,7 @@ class FrameCorrelatorTest {
             expectedIds.forEach { id ->
                 correlator.submit(parseFrame("""{"jsonrpc":"2.0","id":"$id","result":{"seq":"$id"}}"""))
             }
-            assertTrue(latch.await(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS), "All frames should correlate")
+            assertTrue("All frames should correlate", latch.await(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS))
             assertEquals(expectedIds, receivedOrder.toList())
             assertEquals(0, correlator.pendingCount())
         } finally {

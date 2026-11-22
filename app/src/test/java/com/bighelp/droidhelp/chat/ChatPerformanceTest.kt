@@ -1,8 +1,14 @@
 package com.bighelp.droidhelp.chat
 
-import org.junit.jupiter.api.Assertions.*
-import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Test
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
 import java.util.*
 
 class ChatPerformanceTest {
@@ -10,7 +16,7 @@ class ChatPerformanceTest {
     private val user = TimelineSender.user("You")
     private val agent = TimelineSender.agent("bot", "Bot")
 
-    @BeforeEach
+    @Before
     fun setUp() {
         chatPerformance = ChatPerformance()
     }
@@ -78,6 +84,6 @@ class ChatPerformanceTest {
         assertEquals(count, chatPerformance.getHistorySize())
         // A reasonable threshold for 15k appends in memory should be very low.
         // Even on a slow machine, it shouldn't take more than a second.
-        assertTrue(duration < 2000, "Append time too high: ${duration}ms")
+        assertTrue("Append time too high: ${duration}ms", duration < 2000)
     }
 }

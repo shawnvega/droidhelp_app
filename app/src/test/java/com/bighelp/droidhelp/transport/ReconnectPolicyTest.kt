@@ -6,15 +6,15 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertNotNull
-import org.junit.jupiter.api.Assertions.assertNull
-import org.junit.jupiter.api.Assertions.assertThrows
-import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Test
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -22,12 +22,12 @@ import kotlin.time.Duration.Companion.seconds
 
 class ReconnectPolicyTest {
 
-    @BeforeEach
+    @Before
     fun setUp() {
         ReconnectPolicy.reset()
     }
 
-    @AfterEach
+    @After
     fun tearDown() {
         ReconnectPolicy.reset()
     }
@@ -333,8 +333,8 @@ class ReconnectPolicyTest {
         // Definitive rejections prove the host rejected the mutation
         for (code in listOf(400, 401, 403, 404, 405, 409, 413, 415, 422, 429)) {
             assertFalse(
-                ReconnectPolicy.isOutcomeUnknownForHttpMutation(bytesMayHaveLeft = true, receivedStatusCode = code),
                 "Status $code should be a definitive rejection",
+                ReconnectPolicy.isOutcomeUnknownForHttpMutation(bytesMayHaveLeft = true, receivedStatusCode = code),
             )
         }
 

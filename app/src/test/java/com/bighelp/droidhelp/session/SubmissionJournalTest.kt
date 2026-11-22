@@ -1,32 +1,39 @@
 package com.bighelp.droidhelp.session
 
+import org.junit.Rule
+import org.junit.rules.TemporaryFolder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
-import org.junit.jupiter.api.Assertions.*
-import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.io.TempDir
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
 import java.io.File
 import java.nio.file.Path
 
 class SubmissionJournalTest {
 
-    @TempDir
-    lateinit var tempDir: Path
+    @get:Rule
+    val tempFolder = TemporaryFolder()
 
     private lateinit var storageFile: File
     private lateinit var journal: SubmissionJournal
 
-    @BeforeEach
+    @Before
     fun setup() {
-        storageFile = tempDir.resolve("journal.json").toFile()
+        storageFile = File(tempFolder.root, "journal.json")
         journal = SubmissionJournal(storageFile)
     }
 
     @Test
-    fun `test successful state transitions`() = runBlocking {
+    fun `test successful state transitions`() : Unit = runBlocking {
         val intent = "test-intent"
         val entry = journal.prepare(intent)
         assertEquals(State.PREPARED, entry.state)
@@ -58,7 +65,7 @@ class SubmissionJournalTest {
     }
 
     @Test
-    fun `test mark uncertain from any state`() = runBlocking {
+    fun `test mark uncertain from any state`() : Unit = runBlocking {
         // From PREPARED
         val prepared = journal.prepare("intent-1")
         val uncertain1 = journal.markUncertain(prepared.id, "reason-1")
@@ -82,7 +89,7 @@ class SubmissionJournalTest {
     }
 
     @Test
-    fun `test persistence`() = runBlocking {
+    fun `test persistence`() : Unit = runBlocking {
         val intent = "persistent-intent"
         val entry = journal.prepare(intent)
         journal.dispatch(entry.id)
@@ -98,7 +105,7 @@ class SubmissionJournalTest {
     }
 
     @Test
-    fun `test query by state`() = runBlocking {
+    fun `test query by state`() : Unit = runBlocking {
         journal.prepare("intent-1")
         val entry2 = journal.prepare("intent-2")
         journal.dispatch(entry2.id)
@@ -122,7 +129,7 @@ class SubmissionJournalTest {
     }
 
     @Test
-    fun `test thread safety`() = runBlocking {
+    fun `test thread safety`() : Unit = runBlocking {
         val numConcurrent = 50
         val jobs = (1..numConcurrent).map { i ->
             async(Dispatchers.Default) {

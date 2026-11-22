@@ -1,22 +1,26 @@
 package com.bighelp.droidhelp.session
 
 import org.junit.Assert.fail
-import kotlinx.coroutines.test.runTest
 
 /**
- * Asserts that [block] throws an exception of type [T].
- * This function starts its own [runTest] to ensure a coroutine scope is available.
+ * Asserts that [block] throws an exception of type [T] and returns it.
  */
-inline fun <reified T : Throwable> assertThrowsSuspend(crossinline block: suspend () -> Unit) {
-    runTest {
-        try {
-            block()
-            fail("Expected exception ${T::class.java.simpleName} but none was thrown")
-        } catch (e: Throwable) {
-            if (e !is T) throw e
-        }
+suspend inline fun <reified T : Throwable> assertThrows(crossinline block: suspend () -> Unit): T {
+    try {
+        block()
+        fail("Expected exception ${T::class.java.simpleName} but none was thrown")
+    } catch (e: Throwable) {
+        if (e is T) return e
+        throw e
     }
+    throw AssertionError("Unreachable")
 }
+
+/**
+ * Asserts that [block] throws an exception of type [T] and returns it.
+ */
+suspend inline fun <reified T : Throwable> assertThrowsSuspend(crossinline block: suspend () -> Unit): T =
+    assertThrows(block)
 
 /**
  * Asserts that [block] throws an exception of type [T] and returns it.
@@ -26,9 +30,10 @@ inline fun <reified T : Throwable> assertThrowsSuspend(crossinline block: suspen
 suspend fun <T : Throwable> assertThrowsSuspendAndGet(block: suspend () -> Unit): T {
     try {
         block()
-        throw AssertionError("Expected exception but none was thrown")
+        fail("Expected exception but none was thrown")
     } catch (e: Throwable) {
         @Suppress("UNCHECKED_CAST")
         return e as T
     }
+    throw AssertionError("Unreachable")
 }

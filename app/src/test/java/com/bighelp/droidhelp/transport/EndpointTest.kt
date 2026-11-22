@@ -1,17 +1,21 @@
 package com.bighelp.droidhelp.transport
 
+import org.junit.Rule
+import org.junit.rules.TemporaryFolder
 import com.bighelp.droidhelp.platform.FileBasedVersionedDatabase
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertNotEquals
-import org.junit.jupiter.api.Assertions.assertNull
-import org.junit.jupiter.api.Assertions.assertThrows
-import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.io.TempDir
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Test
 import java.io.File
 
 class EndpointTest {
+
+    @get:Rule
+    val tempFolder = TemporaryFolder()
 
     // ---- Round-trip parse/serialize tests ----
 
@@ -170,8 +174,8 @@ class EndpointTest {
             "hermes.tail1234.ts.net", "hermes.beta.tailscale.net"
         )
         for (host in privateHosts) {
-            assertFalse(requireTls(Endpoint.build(scheme = "http", host = host, path = "/")), "http://$host")
-            assertFalse(requireTls(Endpoint.build(scheme = "ws", host = host, path = "/")), "ws://$host")
+            assertFalse("http://$host", requireTls(Endpoint.build(scheme = "http", host = host, path = "/")))
+            assertFalse("ws://$host", requireTls(Endpoint.build(scheme = "ws", host = host, path = "/")))
         }
     }
 
@@ -182,8 +186,8 @@ class EndpointTest {
             "192.168.1.1", "192.168.1.20", "100.64.0.1", "100.127.255.254", "169.254.0.1"
         )
         for (ip in privateIPv4s) {
-            assertFalse(requireTls(Endpoint.build(scheme = "http", host = ip, path = "/")), "http://$ip")
-            assertFalse(requireTls(Endpoint.build(scheme = "ws", host = ip, path = "/")), "ws://$ip")
+            assertFalse("http://$ip", requireTls(Endpoint.build(scheme = "http", host = ip, path = "/")))
+            assertFalse("ws://$ip", requireTls(Endpoint.build(scheme = "ws", host = ip, path = "/")))
         }
     }
 
@@ -194,8 +198,8 @@ class EndpointTest {
             "::ffff:127.0.0.1", "::ffff:10.0.0.1", "::ffff:100.64.0.1"
         )
         for (ip in privateIPv6s) {
-            assertFalse(requireTls(Endpoint.build(scheme = "http", host = ip, path = "/")), "http://[$ip]")
-            assertFalse(requireTls(Endpoint.build(scheme = "ws", host = ip, path = "/")), "ws://[$ip]")
+            assertFalse("http://[$ip]", requireTls(Endpoint.build(scheme = "http", host = ip, path = "/")))
+            assertFalse("ws://[$ip]", requireTls(Endpoint.build(scheme = "ws", host = ip, path = "/")))
         }
     }
 
@@ -208,8 +212,8 @@ class EndpointTest {
             "example-ts.net", "tailscale.net"
         )
         for (host in publicHosts) {
-            assertTrue(requireTls(Endpoint.build(scheme = "http", host = host, path = "/")), "http://$host")
-            assertTrue(requireTls(Endpoint.build(scheme = "ws", host = host, path = "/")), "ws://$host")
+            assertTrue("http://$host", requireTls(Endpoint.build(scheme = "http", host = host, path = "/")))
+            assertTrue("ws://$host", requireTls(Endpoint.build(scheme = "ws", host = host, path = "/")))
         }
     }
 
@@ -253,7 +257,7 @@ class EndpointTest {
             "", "127.1", "2130706433", "0x7f000001", "0177.0.0.1", "fe80::1%eth0", "1::2::3", "1:2:3:4:5:6:7::8"
         )
         for (host in rejected) {
-            assertFalse(isPrivateNetworkHost(host), "expected false for '$host'")
+            assertFalse("expected false for '$host'", isPrivateNetworkHost(host))
         }
     }
 
@@ -286,7 +290,7 @@ class EndpointTest {
             "http://0177.0.0.1/path", "https://example.com/" + "a".repeat(2_050)
         )
         for (url in invalidUrls) {
-            assertThrows(IllegalArgumentException::class.java, { Endpoint.fromString(url) }, "expected throw: $url")
+            assertThrows("expected throw: $url", IllegalArgumentException::class.java) { Endpoint.fromString(url) }
         }
     }
 
@@ -370,10 +374,9 @@ class EndpointTest {
         )
         for (encoded in invalidEncoded) {
             assertThrows(
-                IllegalArgumentException::class.java,
-                { Endpoint.fromEncodedString(encoded) },
-                "expected throw: $encoded"
-            )
+                "expected throw: $encoded",
+                IllegalArgumentException::class.java
+            ) { Endpoint.fromEncodedString(encoded) }
         }
     }
 
@@ -427,7 +430,7 @@ class EndpointTest {
 
         for (blankPrefix in listOf("", "   ", "/", "///")) {
             val ep = Endpoint.build(scheme = "https", host = "api.example.com", deploymentPrefix = blankPrefix)
-            assertNull(ep.deploymentPrefix, "expected null prefix for '$blankPrefix'")
+            assertNull("expected null prefix for '$blankPrefix'", ep.deploymentPrefix)
         }
         for (badPrefix in listOf("LOCALHOST", "LocalHost", "v1+2", "v1%20", "v1@bad")) {
             assertThrows(IllegalArgumentException::class.java) {
@@ -439,7 +442,7 @@ class EndpointTest {
             "https://v1%20/api.example.com/api",
             "https://v1@bad/api.example.com/api"
         )) {
-            assertThrows(IllegalArgumentException::class.java, { Endpoint.fromString(badUrl) }, badUrl)
+            assertThrows(badUrl, IllegalArgumentException::class.java) { Endpoint.fromString(badUrl) }
         }
     }
 
@@ -463,8 +466,8 @@ class EndpointTest {
             assertFalse(wsEp.isSecure)
             assertTrue(httpsEp.isSecure)
             assertTrue(wssEp.isSecure)
-            assertTrue(requireTls(httpEp), "expected TLS required for http://$host")
-            assertTrue(requireTls(wsEp), "expected TLS required for ws://$host")
+            assertTrue("expected TLS required for http://$host", requireTls(httpEp))
+            assertTrue("expected TLS required for ws://$host", requireTls(wsEp))
 
             val httpErr = assertThrows(IllegalArgumentException::class.java) { enforceTls(httpEp) }
             assertTrue(httpErr.message.orEmpty().contains("https") && httpErr.message.orEmpty().contains(httpEp.host))
@@ -492,8 +495,8 @@ class EndpointTest {
         for (host in privateBoundaryHosts) {
             val httpEp = Endpoint.build(scheme = "http", host = host, port = 9119, path = "/api")
             val wsEp = Endpoint.build(scheme = "ws", host = host, port = 9119, path = "/ws")
-            assertFalse(requireTls(httpEp), "expected HTTP allowed for $host")
-            assertFalse(requireTls(wsEp), "expected WS allowed for $host")
+            assertFalse("expected HTTP allowed for $host", requireTls(httpEp))
+            assertFalse("expected WS allowed for $host", requireTls(wsEp))
             assertEquals(httpEp, enforceTls(httpEp))
             assertEquals(wsEp, enforceTls(wsEp))
         }
@@ -548,7 +551,8 @@ class EndpointTest {
     }
 
     @Test
-    fun `endpoint persists to disk and reloads through FileBasedVersionedDatabase`(@TempDir tempDir: File) {
+    fun `endpoint persists to disk and reloads through FileBasedVersionedDatabase`() {
+        val tempDir = tempFolder.root
         val dbFile = File(tempDir, "endpoints.db")
         val initial = Endpoint.build(
             scheme = "https", host = "api.example.com", port = 8443, path = "/chat/stream", deploymentPrefix = "prod_v1"
@@ -585,10 +589,9 @@ class EndpointTest {
 
         for (badPersisted in listOf("", "https|example.com|443|/|localhost", "http|fe80::1%eth0|80|/|")) {
             assertThrows(
-                IllegalArgumentException::class.java,
-                { Endpoint.fromEncodedString(badPersisted) },
-                "expected throw: $badPersisted"
-            )
+                "expected throw: $badPersisted",
+                IllegalArgumentException::class.java
+            ) { Endpoint.fromEncodedString(badPersisted) }
         }
     }
 }

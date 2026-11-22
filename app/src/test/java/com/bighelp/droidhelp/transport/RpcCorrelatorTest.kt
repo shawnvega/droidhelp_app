@@ -1,7 +1,13 @@
 package com.bighelp.droidhelp.transport
 
-import org.junit.jupiter.api.Assertions.*
-import org.junit.jupiter.api.Test
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Test
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -23,7 +29,7 @@ class RpcCorrelatorTest {
 
         correlator.correlate(requestId, message)
 
-        assertTrue(latch.await(2, TimeUnit.SECONDS), "Callback was not called in time")
+        assertTrue("Callback was not called in time", latch.await(2, TimeUnit.SECONDS))
         assertEquals(message, receivedMessage)
         correlator.shutdown()
     }
@@ -46,7 +52,7 @@ class RpcCorrelatorTest {
 
         // Wait a bit to see if it gets called
         latch.await(500, TimeUnit.MILLISECONDS)
-        assertFalse(called, "Callback should not have been called after cancellation")
+        assertFalse("Callback should not have been called after cancellation", called)
         correlator.shutdown()
     }
 
@@ -80,8 +86,8 @@ class RpcCorrelatorTest {
             correlator.correlate("req-$i", Message.Ping)
         }
 
-        assertTrue(latch.await(5, TimeUnit.SECONDS), "Not all callbacks completed")
-        assertEquals(0, maxConcurrentObserved.get(), "Callbacks were executed concurrently")
+        assertTrue("Not all callbacks completed", latch.await(5, TimeUnit.SECONDS))
+        assertEquals("Callbacks were executed concurrently", 0, maxConcurrentObserved.get())
         correlator.shutdown()
     }
 
@@ -110,7 +116,7 @@ class RpcCorrelatorTest {
         threads.forEach { it.start() }
         threads.forEach { it.join() }
 
-        assertTrue(latch.await(5, TimeUnit.SECONDS), "Not all requests were correlated")
+        assertTrue("Not all requests were correlated", latch.await(5, TimeUnit.SECONDS))
         assertEquals(totalRequests, completedCount.get())
         correlator.shutdown()
     }
@@ -140,9 +146,9 @@ class RpcCorrelatorTest {
             correlator.submit(Message.Receipt("ordered-$i"))
         }
 
-        assertTrue(latch.await(5, TimeUnit.SECONDS), "Not all ordered messages processed")
+        assertTrue("Not all ordered messages processed", latch.await(5, TimeUnit.SECONDS))
         val expected = (1..count).map { "ordered-$it" }
-        assertEquals(expected, receivedOrder.toList(), "Messages were not processed in submission order")
+        assertEquals("Messages were not processed in submission order", expected, receivedOrder.toList())
         correlator.shutdown()
     }
 
@@ -161,7 +167,7 @@ class RpcCorrelatorTest {
         correlator.start()
         correlator.submit(Message.Receipt("loop-req"))
 
-        assertTrue(latch.await(2, TimeUnit.SECONDS), "Callback was not invoked by the loop")
+        assertTrue("Callback was not invoked by the loop", latch.await(2, TimeUnit.SECONDS))
         assertTrue(received is Message.Receipt)
         assertEquals("loop-req", (received as Message.Receipt).entryId)
         // The pending entry must be removed after correlation
@@ -195,8 +201,8 @@ class RpcCorrelatorTest {
             correlator.submit(Message.Receipt("serial-$i"))
         }
 
-        assertTrue(latch.await(5, TimeUnit.SECONDS), "Not all callbacks completed")
-        assertEquals(0, maxConcurrentObserved.get(), "Callbacks executed concurrently in reader/writer loop")
+        assertTrue("Not all callbacks completed", latch.await(5, TimeUnit.SECONDS))
+        assertEquals("Callbacks executed concurrently in reader/writer loop", 0, maxConcurrentObserved.get())
         correlator.shutdown()
     }
 

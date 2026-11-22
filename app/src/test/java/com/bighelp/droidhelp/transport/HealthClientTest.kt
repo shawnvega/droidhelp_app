@@ -5,25 +5,25 @@ import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertThrows
+import org.junit.After
+import org.junit.Before
+import org.junit.Test
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import java.io.IOException
 
 class HealthClientTest {
     private lateinit var server: MockWebServer
     private lateinit var client: HealthClient
 
-    @BeforeEach
+    @Before
     fun setUp() {
         server = MockWebServer()
         server.start()
         client = HealthClient(OkHttpClient(), server.url("/").toString())
     }
 
-    @AfterEach
+    @After
     fun tearDown() {
         server.shutdown()
     }

@@ -15,14 +15,14 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertNull
-import org.junit.jupiter.api.Assertions.assertThrows
-import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Test
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 
@@ -33,7 +33,7 @@ class WebSocketTransportOutboundQueueTest {
     private lateinit var ioScope: CoroutineScope
     private val serverSockets = CopyOnWriteArrayList<WebSocket>()
 
-    @BeforeEach
+    @Before
     fun setUp() {
         serverSockets.clear()
         server = MockWebServer()
@@ -46,7 +46,7 @@ class WebSocketTransportOutboundQueueTest {
         ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     }
 
-    @AfterEach
+    @After
     fun tearDown() {
         serverSockets.forEach { it.close(NORMAL_CLOSE_CODE, "teardown") }
         serverSockets.clear()
@@ -167,7 +167,7 @@ class WebSocketTransportOutboundQueueTest {
     }
 
     @Test
-    fun testEnqueueOutgoingDeliversMessagesInFifoOrderWhenConnected() = runBlocking {
+    fun testEnqueueOutgoingDeliversMessagesInFifoOrderWhenConnected() : Unit = runBlocking {
         val serverReceived = CopyOnWriteArrayList<Message>()
         val allReceived = CompletableDeferred<Unit>()
         server.enqueue(

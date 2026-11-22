@@ -2,13 +2,13 @@ package com.bighelp.droidhelp.transport
 
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertNull
-import org.junit.jupiter.api.Assertions.assertThrows
-import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Test
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
 import java.util.Collections
 import java.util.Random
 import java.util.concurrent.Callable
@@ -28,7 +28,7 @@ class SocketOwnerFencingTest {
 
     private lateinit var owners: Owners
 
-    @BeforeEach
+    @Before
     fun setUp() {
         owners = Owners()
     }
@@ -409,7 +409,7 @@ class SocketOwnerFencingTest {
         assertEquals(0, staleSuccesses.get())
         assertEquals(staleWorkers * epochsPerWorker, staleRejections.get())
         assertTrue(succeededEpochs.isNotEmpty())
-        assertEquals(succeededEpochs.size, succeededEpochs.toSet().size, "Each winning epoch must be unique")
+        assertEquals("Each winning epoch must be unique", succeededEpochs.size, succeededEpochs.toSet().size)
         val finalSocket = owners.getSocketOwner()
         assertEquals(activeOwner, finalSocket?.owner)
         assertEquals(succeededEpochs.maxOrNull(), finalSocket?.socketEpoch)
@@ -439,7 +439,7 @@ class SocketOwnerFencingTest {
                     repeat(iterationsPerIncrementWorker) {
                         val issued = owners.incrementSocketEpoch(owner)
                         assertEquals(owner, issued.owner)
-                        assertTrue(issuedEpochs.add(issued.socketEpoch), "Epoch ${issued.socketEpoch} reused")
+                        assertTrue("Epoch ${issued.socketEpoch} reused", issuedEpochs.add(issued.socketEpoch))
                     }
                 })
             }
@@ -453,7 +453,7 @@ class SocketOwnerFencingTest {
                             val count = retireCountsByEpoch
                                 .computeIfAbsent(captured.socketEpoch) { AtomicInteger(0) }
                                 .incrementAndGet()
-                            assertEquals(1, count, "Epoch ${captured.socketEpoch} was retired more than once")
+                            assertEquals("Epoch ${captured.socketEpoch} was retired more than once", 1, count)
                         }
                     }
                 })
@@ -560,7 +560,7 @@ class SocketOwnerFencingTest {
         }
 
         assertEquals(0, staleMutationSuccesses.get())
-        assertFalse(regressionDetected.get(), "Observed SignIn authenticationGeneration regression")
+        assertFalse("Observed SignIn authenticationGeneration regression", regressionDetected.get())
         val finalSignIn = SignIn("https://example.com", "user1", totalGenerations)
         val finalOwner = Owner(finalSignIn, 1L)
         assertEquals(finalSignIn, owners.getSignIn())

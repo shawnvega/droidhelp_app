@@ -7,14 +7,14 @@ import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertNotEquals
-import org.junit.jupiter.api.Assertions.assertNull
-import org.junit.jupiter.api.Assertions.assertThrows
-import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Test
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
 import java.io.IOException
 import java.util.Collections
 import java.util.concurrent.Callable
@@ -27,7 +27,7 @@ class OwnersTest {
 
     private lateinit var owners: Owners
 
-    @BeforeEach
+    @Before
     fun setUp() {
         owners = Owners()
     }
@@ -747,7 +747,7 @@ class OwnersTest {
             } catch (_: StaleOwnerException) {
                 caughtStale = true
             }
-            assertTrue(caughtStale, "Expected StaleOwnerException when SocketOwner rotated while suspended")
+            assertTrue("Expected StaleOwnerException when SocketOwner rotated while suspended", caughtStale)
         }
     }
 }

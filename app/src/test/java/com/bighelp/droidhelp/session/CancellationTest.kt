@@ -24,15 +24,15 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
 import okio.ByteString
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertNotEquals
-import org.junit.jupiter.api.Assertions.assertNull
-import org.junit.jupiter.api.Assertions.assertThrows
-import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Test
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -43,7 +43,7 @@ class CancellationTest {
     private lateinit var endpoint: Endpoint
     private val json = Json { ignoreUnknownKeys = false }
 
-    @BeforeEach
+    @Before
     fun setUp() {
         server = MockWebServer()
         server.start()
@@ -61,7 +61,7 @@ class CancellationTest {
         SecureInput.clear()
     }
 
-    @AfterEach
+    @After
     fun tearDown() {
         SecureInput.clear()
         httpClient.dispatcher.executorService.shutdown()
@@ -264,7 +264,7 @@ class CancellationTest {
     }
 
     @Test
-    fun `cancelSession throws StaleOwnerException on pre-flight and post-flight owner mismatch`() = runBlocking {
+    fun `cancelSession throws StaleOwnerException on pre-flight and post-flight owner mismatch`() : Unit = runBlocking {
         val owners = Owners()
         val signIn = SignIn(endpoint.canonical, "alice", 1L)
         val owner = Owner(signIn, 1L)
@@ -569,7 +569,7 @@ class CancellationTest {
     }
 
     @Test
-    fun `coroutine cancellation propagates CancellationException without swallowing`() = runBlocking {
+    fun `coroutine cancellation propagates CancellationException without swallowing`() : Unit = runBlocking {
         val requestStarted = CountDownLatch(1)
         val releaseServer = CountDownLatch(1)
         server.dispatcher = object : Dispatcher() {

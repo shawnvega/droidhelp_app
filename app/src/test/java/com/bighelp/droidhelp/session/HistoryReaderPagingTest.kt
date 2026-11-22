@@ -1,13 +1,13 @@
 package com.bighelp.droidhelp.session
 
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertNotEquals
-import org.junit.jupiter.api.Assertions.assertNotNull
-import org.junit.jupiter.api.Assertions.assertNull
-import org.junit.jupiter.api.Assertions.assertThrows
-import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.Test
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Test
 import java.util.Base64
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
@@ -183,7 +183,7 @@ class HistoryReaderPagingTest {
         assertEquals(mixedSchemeEntries.size - 1, cursors.size)
         assertEquals(cursors.size, cursors.toSet().size)
         for (cursor in cursors) {
-            assertTrue(OPAQUE_CURSOR_REGEX.matches(cursor), "Cursor should be URL-safe opaque base64: $cursor")
+            assertTrue("Cursor should be URL-safe opaque base64: $cursor", OPAQUE_CURSOR_REGEX.matches(cursor))
             assertFalse(cursor.contains(SESSION_A))
             assertFalse(cursor.contains("immutable-secret-key"))
             assertFalse(cursor.contains("v1:key:"))

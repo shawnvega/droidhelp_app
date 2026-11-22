@@ -4,12 +4,12 @@ import kotlinx.coroutines.test.runTest
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertThrows
-import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.After
+import org.junit.Before
+import org.junit.Test
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import java.io.IOException
 import kotlinx.coroutines.runBlocking
 
@@ -18,7 +18,7 @@ class CancellationClientTest {
     private lateinit var client: CancellationClient
     private lateinit var endpoint: Endpoint
 
-    @BeforeEach
+    @Before
     fun setUp() {
         server = MockWebServer()
         server.start()
@@ -32,7 +32,7 @@ class CancellationClientTest {
         client = CancellationClient(OkHttpClient(), endpoint)
     }
 
-    @AfterEach
+    @After
     fun tearDown() {
         server.shutdown()
     }
@@ -50,12 +50,12 @@ class CancellationClientTest {
         val body = recordedRequest.body?.readUtf8() ?: ""
         println("DEBUG: body = $body")
         // Check that both fields are present and have non-empty values
-        assertTrue(body.contains("\"requestId\":\"$requestId\""), "Missing requestId")
-        assertTrue(body.contains("\"cancellationId\":\""), "Missing cancellationId key or opening quote")
+        assertTrue("Missing requestId", body.contains("\"requestId\":\"$requestId\""))
+        assertTrue("Missing cancellationId key or opening quote", body.contains("\"cancellationId\":\""))
         // Check that cancellationId is not empty by looking for the closing quote after the opening one
         // A simple way is to check that it contains a non-empty string between quotes
         // But since we don't want to parse, let's just check that it doesn't end with :"\""
-        assertTrue(!body.contains("\"cancellationId\":\"\""), "cancellationId should not be empty")
+        assertTrue("cancellationId should not be empty", !body.contains("\"cancellationId\":\"\""))
     }
 
     @Test

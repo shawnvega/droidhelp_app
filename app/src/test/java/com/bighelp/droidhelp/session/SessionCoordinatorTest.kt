@@ -1,10 +1,15 @@
 package com.bighelp.droidhelp.session
 
 import kotlinx.coroutines.test.runTest
-import org.junit.jupiter.api.Assertions.*
-import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.assertThrows
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
 
 /**
  * In-memory repository that mirrors the production [SessionRepository] interface.
@@ -34,7 +39,7 @@ class SessionCoordinatorTest {
     private lateinit var repository: InMemorySessionRepository
     private lateinit var coordinator: SessionCoordinator
 
-    @BeforeEach
+    @Before
     fun setUp() {
         repository = InMemorySessionRepository()
         coordinator = SessionCoordinator(repository)

@@ -1,8 +1,8 @@
 package com.bighelp.droidhelp.transport
 
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.Test
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
 import kotlinx.coroutines.test.runTest
 import com.bighelp.droidhelp.session.Session
 

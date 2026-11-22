@@ -4,8 +4,14 @@ import java.net.URI
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import kotlinx.coroutines.test.runTest
-import org.junit.jupiter.api.Assertions.*
-import org.junit.jupiter.api.Test
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Test
 
 /**
  * Tests for the SignInCallbackHandler class.

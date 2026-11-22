@@ -79,8 +79,6 @@ dependencies {
     debugImplementation(libs.ui.tooling.core)
     
     testImplementation(libs.junit4)
-    testImplementation(libs.junit.jupiter)
-    testImplementation(libs.junit.platform.launcher)
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("org.robolectric:robolectric:4.11.1")
@@ -100,7 +98,6 @@ detekt {
 }
 
 tasks.withType<Test>().configureEach {
-    useJUnitPlatform()
     testLogging {
         events("failed")
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.SHORT

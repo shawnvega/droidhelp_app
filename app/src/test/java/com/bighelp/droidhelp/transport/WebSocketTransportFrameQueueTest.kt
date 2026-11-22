@@ -15,12 +15,12 @@ import okhttp3.WebSocketListener
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okio.ByteString.Companion.encodeUtf8
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertNull
-import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Test
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 
@@ -31,7 +31,7 @@ class WebSocketTransportFrameQueueTest {
     private lateinit var ioScope: CoroutineScope
     private val serverSockets = CopyOnWriteArrayList<WebSocket>()
 
-    @BeforeEach
+    @Before
     fun setUp() {
         serverSockets.clear()
         server = MockWebServer()
@@ -44,7 +44,7 @@ class WebSocketTransportFrameQueueTest {
         ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     }
 
-    @AfterEach
+    @After
     fun tearDown() {
         serverSockets.forEach { it.close(NORMAL_CLOSE_CODE, "teardown") }
         serverSockets.clear()
@@ -55,7 +55,7 @@ class WebSocketTransportFrameQueueTest {
     }
 
     @Test
-    fun testIncomingNewlineJsonFramesExtractFieldsIntoQueueAndRecoverFromMalformed() = runBlocking {
+    fun testIncomingNewlineJsonFramesExtractFieldsIntoQueueAndRecoverFromMalformed() : Unit = runBlocking {
         val serverWsDeferred = enqueueUpgrade()
         val transport = createTransport(maxFrameSize = TEST_MAX_FRAME_SIZE)
         val listenerFrames = CopyOnWriteArrayList<ParsedJsonFrame>()
@@ -105,7 +105,7 @@ class WebSocketTransportFrameQueueTest {
     }
 
     @Test
-    fun testParsedFrameQueueEnforcesMaxQueueSizeAndUnblocksReceiveOnClose() = runBlocking {
+    fun testParsedFrameQueueEnforcesMaxQueueSizeAndUnblocksReceiveOnClose() : Unit = runBlocking {
         val serverWsDeferred = enqueueUpgrade()
         val transport = createTransport(maxQueueSize = 2)
         val fourthSeen = CompletableDeferred<Unit>()

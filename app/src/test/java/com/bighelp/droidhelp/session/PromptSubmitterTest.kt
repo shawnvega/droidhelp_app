@@ -1,29 +1,36 @@
 package com.bighelp.droidhelp.session
 
+import org.junit.Rule
+import org.junit.rules.TemporaryFolder
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.runTest
-import org.junit.jupiter.api.Assertions.*
-import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.Test
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.After
+import org.junit.Test
 import java.io.File
 import java.nio.file.Path
 import java.time.Instant
-import org.junit.jupiter.api.io.TempDir
 
 class PromptSubmitterTest {
 
-    @TempDir
-    lateinit var tempDir: Path
+    @get:Rule
+    val tempFolder = TemporaryFolder()
 
     private lateinit var storageFile: File
     private lateinit var journal: SubmissionJournal
     private lateinit var submitter: PromptSubmitter
 
-    @BeforeEach
+    @Before
     fun setup() {
-        storageFile = tempDir.resolve("journal.json").toFile()
+        storageFile = File(tempFolder.root, "journal.json")
         journal = SubmissionJournal(storageFile)
         submitter = PromptSubmitter(journal, FakeStreamingClient(), SecureInput)
     }

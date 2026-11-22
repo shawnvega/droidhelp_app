@@ -113,31 +113,22 @@
     <ID>UseRequire:Endpoint.kt$Endpoint.Companion$throw IllegalArgumentException("Missing port after ':' in endpoint URL: '$url'")</ID>
     <ID>WildcardImport:AppComposition.kt$import androidx.compose.runtime.*</ID>
     <ID>WildcardImport:AppComposition.kt$import com.bighelp.droidhelp.home.model.*</ID>
-    <ID>WildcardImport:AuthTest.kt$import org.junit.jupiter.api.Assertions.*</ID>
-    <ID>WildcardImport:CapabilitiesRegistryTest.kt$import org.junit.jupiter.api.Assertions.*</ID>
-    <ID>WildcardImport:ChatPerformanceTest.kt$import org.junit.jupiter.api.Assertions.*</ID>
     <ID>WildcardImport:ChatsInboxView.kt$import androidx.compose.foundation.layout.*</ID>
     <ID>WildcardImport:ChatsInboxView.kt$import androidx.compose.material3.*</ID>
     <ID>WildcardImport:ChatsInboxView.kt$import androidx.compose.runtime.*</ID>
     <ID>WildcardImport:ChatsInboxView.kt$import com.bighelp.droidhelp.home.model.*</ID>
     <ID>WildcardImport:DroidHelpApp.kt$import androidx.compose.runtime.*</ID>
     <ID>WildcardImport:DroidHelpApp.kt$import com.bighelp.droidhelp.home.model.*</ID>
-    <ID>WildcardImport:EndpointTest.kt$import org.junit.jupiter.api.Assertions.*</ID>
     <ID>WildcardImport:EventStream.kt$import kotlinx.coroutines.*</ID>
     <ID>WildcardImport:EventStream.kt$import kotlinx.coroutines.flow.*</ID>
     <ID>WildcardImport:Heartbeat.kt$import kotlinx.coroutines.*</ID>
     <ID>WildcardImport:HomeHeaderBar.kt$import androidx.compose.foundation.layout.*</ID>
     <ID>WildcardImport:HomeHeaderBar.kt$import androidx.compose.material.icons.filled.*</ID>
     <ID>WildcardImport:HomeHeaderBar.kt$import androidx.compose.material3.*</ID>
-    <ID>WildcardImport:PromptSubmitterTest.kt$import org.junit.jupiter.api.Assertions.*</ID>
-    <ID>WildcardImport:RpcCorrelatorTest.kt$import org.junit.jupiter.api.Assertions.*</ID>
     <ID>WildcardImport:SearchScreen.kt$import androidx.compose.foundation.layout.*</ID>
     <ID>WildcardImport:SearchScreen.kt$import androidx.compose.material3.*</ID>
     <ID>WildcardImport:SearchScreen.kt$import androidx.compose.runtime.*</ID>
-    <ID>WildcardImport:SessionCoordinatorTest.kt$import org.junit.jupiter.api.Assertions.*</ID>
     <ID>WildcardImport:SignInCallbackHandlerTest.kt$import okhttp3.*</ID>
-    <ID>WildcardImport:SignInCallbackHandlerTest.kt$import org.junit.jupiter.api.Assertions.*</ID>
-    <ID>WildcardImport:SubmissionJournalTest.kt$import org.junit.jupiter.api.Assertions.*</ID>
     <ID>WildcardImport:Theme.kt$import androidx.compose.material3.*</ID>
     <ID>WildcardImport:WorkView.kt$import androidx.compose.foundation.layout.*</ID>
     <ID>WildcardImport:WorkView.kt$import androidx.compose.material3.*</ID>

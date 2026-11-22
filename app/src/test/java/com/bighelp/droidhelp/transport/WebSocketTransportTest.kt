@@ -22,15 +22,15 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okio.ByteString
 import okio.ByteString.Companion.encodeUtf8
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertNotNull
-import org.junit.jupiter.api.Assertions.assertNull
-import org.junit.jupiter.api.Assertions.assertThrows
-import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Test
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 
@@ -41,7 +41,7 @@ class WebSocketTransportTest {
     private lateinit var ioScope: CoroutineScope
     private val serverSockets = CopyOnWriteArrayList<WebSocket>()
 
-    @BeforeEach
+    @Before
     fun setUp() {
         serverSockets.clear()
         server = MockWebServer()
@@ -55,7 +55,7 @@ class WebSocketTransportTest {
         ReconnectPolicy.setSession(null)
     }
 
-    @AfterEach
+    @After
     fun tearDown() {
         serverSockets.forEach { it.close(NORMAL_CLOSE_CODE, "teardown") }
         serverSockets.clear()
@@ -109,7 +109,7 @@ class WebSocketTransportTest {
     }
 
     @Test
-    fun testConnectSuccessSendsApiWsPathAndCustomHeaders() = runBlocking {
+    fun testConnectSuccessSendsApiWsPathAndCustomHeaders() : Unit = runBlocking {
         val serverOpened = enqueueUpgrade()
         val headers = mapOf("Authorization" to "Bearer test-token", "X-DroidHelp-Client" to "android-test")
         val transport = createServerTransport(
@@ -142,7 +142,7 @@ class WebSocketTransportTest {
     }
 
     @Test
-    fun testConnectReturnsFalseOnServerRejection() = runBlocking {
+    fun testConnectReturnsFalseOnServerRejection() : Unit = runBlocking {
         server.enqueue(MockResponse().setResponseCode(HTTP_INTERNAL_ERROR).setBody("server unavailable"))
         val transport = createServerTransport()
         try {
@@ -165,7 +165,7 @@ class WebSocketTransportTest {
     }
 
     @Test
-    fun testJsonFramesRoundTripThroughOutboundQueue() = runBlocking {
+    fun testJsonFramesRoundTripThroughOutboundQueue() : Unit = runBlocking {
         val serverReceived = CopyOnWriteArrayList<String>()
         val twoFramesReceived = CompletableDeferred<Unit>()
         val serverSocketDeferred = enqueueUpgrade { _, text ->
@@ -211,7 +211,7 @@ class WebSocketTransportTest {
     }
 
     @Test
-    fun testOutboundQueueDropsStaleFencedMessagesOnNewSocketEpoch() = runBlocking {
+    fun testOutboundQueueDropsStaleFencedMessagesOnNewSocketEpoch() : Unit = runBlocking {
         val serverReceived = CopyOnWriteArrayList<String>()
         val freshMessageReceived = CompletableDeferred<String>()
         enqueueUpgrade { _, text ->
@@ -247,7 +247,7 @@ class WebSocketTransportTest {
     }
 
     @Test
-    fun testBoundedDecodeRejectsOversizedTextAndBinaryFrames() = runBlocking {
+    fun testBoundedDecodeRejectsOversizedTextAndBinaryFrames() : Unit = runBlocking {
         val serverSocketDeferred = enqueueUpgrade()
         val transport = createServerTransport(
             config = WebSocketTransport.WebSocketConfig(maxFrameSize = SMALL_MAX_FRAME_SIZE, client = client)
@@ -281,7 +281,7 @@ class WebSocketTransportTest {
     }
 
     @Test
-    fun testRpcCorrelatorIntegratesWithIncomingReceiptsAndCancel() = runBlocking {
+    fun testRpcCorrelatorIntegratesWithIncomingReceiptsAndCancel() : Unit = runBlocking {
         val serverSocketDeferred = enqueueUpgrade()
         val transport = createServerTransport()
         try {
@@ -307,7 +307,7 @@ class WebSocketTransportTest {
     }
 
     @Test
-    fun testBoundedOutboundQueueDeliversQueuedMessages() = runBlocking {
+    fun testBoundedOutboundQueueDeliversQueuedMessages() : Unit = runBlocking {
         val serverReceived = CopyOnWriteArrayList<Message>()
         val allReceived = CompletableDeferred<Unit>()
         enqueueUpgrade { _, text ->
@@ -332,7 +332,7 @@ class WebSocketTransportTest {
     }
 
     @Test
-    fun testNewlineFramedAndSplitJsonPayloadsWithBoundedBuffer() = runBlocking {
+    fun testNewlineFramedAndSplitJsonPayloadsWithBoundedBuffer() : Unit = runBlocking {
         val serverSocketDeferred = enqueueUpgrade()
         val transport = createServerTransport(
             config = WebSocketTransport.WebSocketConfig(maxFrameSize = NDJSON_TEST_MAX_BUFFER, client = client)
@@ -369,7 +369,7 @@ class WebSocketTransportTest {
     }
 
     @Test
-    fun testConnectionLifecycleAndCloseReleasesResources() = runBlocking {
+    fun testConnectionLifecycleAndCloseReleasesResources() : Unit = runBlocking {
         val firstServerWs = enqueueUpgrade()
         enqueueUpgrade()
         val transport = createServerTransport(bindOwner = true)
@@ -435,7 +435,7 @@ class WebSocketTransportTest {
     }
 
     @Test
-    fun testInvalidCustomHeaderFailsConnectCleanly() = runBlocking {
+    fun testInvalidCustomHeaderFailsConnectCleanly() : Unit = runBlocking {
         val transport = createServerTransport(
             config = WebSocketTransport.WebSocketConfig(
                 headers = mapOf("X-Bad-Header" to "line1\r\nInjected: true"),
@@ -453,7 +453,7 @@ class WebSocketTransportTest {
     }
 
     @Test
-    fun testConcurrentConnectCallsDeduplicateIntoSingleHandshake() = runBlocking {
+    fun testConcurrentConnectCallsDeduplicateIntoSingleHandshake() : Unit = runBlocking {
         enqueueUpgrade()
         val transport = createServerTransport()
         try {
@@ -469,7 +469,7 @@ class WebSocketTransportTest {
     }
 
     @Test
-    fun testBoundedDecodeRejectsOversizedMessageChunksDeepNestingAndIncompleteBinaryJson() = runBlocking {
+    fun testBoundedDecodeRejectsOversizedMessageChunksDeepNestingAndIncompleteBinaryJson() : Unit = runBlocking {
         val serverSocketDeferred = enqueueUpgrade()
         val transport = createServerTransport(
             config = WebSocketTransport.WebSocketConfig(
@@ -510,7 +510,7 @@ class WebSocketTransportTest {
     }
 
     @Test
-    fun testBurstIncomingFramesBeyondChannelCapacityAreNotSilentlyDropped() = runBlocking {
+    fun testBurstIncomingFramesBeyondChannelCapacityAreNotSilentlyDropped() : Unit = runBlocking {
         val serverSocketDeferred = enqueueUpgrade()
         val transport = createServerTransport(
             config = WebSocketTransport.WebSocketConfig(maxQueueSize = 2, client = client)
@@ -541,7 +541,7 @@ class WebSocketTransportTest {
     }
 
     @Test
-    fun testBoundedOutboundQueuePreservesStrictFifoOrderUnderSuspendOverflow() = runBlocking {
+    fun testBoundedOutboundQueuePreservesStrictFifoOrderUnderSuspendOverflow() : Unit = runBlocking {
         val serverReceivedIds = CopyOnWriteArrayList<String>()
         val allReceived = CompletableDeferred<Unit>()
         enqueueUpgrade { _, text ->
@@ -575,7 +575,7 @@ class WebSocketTransportTest {
     }
 
     @Test
-    fun testSendWithCorrelationRoutesThroughOutboundQueueAndCorrelatesReply() = runBlocking {
+    fun testSendWithCorrelationRoutesThroughOutboundQueueAndCorrelatesReply() : Unit = runBlocking {
         val serverReceived = CompletableDeferred<String>()
         enqueueUpgrade { webSocket, text ->
             serverReceived.complete(text)
@@ -616,7 +616,7 @@ class WebSocketTransportTest {
     }
 
     @Test
-    fun testDisconnectAndReconnectIncrementsSocketEpochAndSupportsSuspendingEnqueue() = runBlocking {
+    fun testDisconnectAndReconnectIncrementsSocketEpochAndSupportsSuspendingEnqueue() : Unit = runBlocking {
         val secondServerReceived = CompletableDeferred<Message>()
         enqueueUpgrade()
         enqueueUpgrade { _, text -> secondServerReceived.complete(Json.decodeFromString(Message.serializer(), text)) }

@@ -1,8 +1,8 @@
 package com.bighelp.droidhelp.session
 
 import kotlinx.coroutines.test.runTest
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Test
+import org.junit.Assert.assertEquals
+import org.junit.Test
 
 class SecureInputTest {
 

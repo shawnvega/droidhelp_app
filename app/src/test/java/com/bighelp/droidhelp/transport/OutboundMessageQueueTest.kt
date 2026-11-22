@@ -6,12 +6,12 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertNull
-import org.junit.jupiter.api.Assertions.assertThrows
-import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.Test
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Test
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -195,7 +195,7 @@ class OutboundMessageQueueTest {
     }
 
     @Test
-    fun testConcurrentProducersAndConsumersRespectCapacityAndConservation() = runBlocking(Dispatchers.Default) {
+    fun testConcurrentProducersAndConsumersRespectCapacityAndConservation() : Unit = runBlocking(Dispatchers.Default) {
         val queue = OutboundMessageQueue<Int>(
             maxSize = CONCURRENT_CAPACITY,
             overflowPolicy = OutboundMessageQueue.OverflowPolicy.SUSPEND

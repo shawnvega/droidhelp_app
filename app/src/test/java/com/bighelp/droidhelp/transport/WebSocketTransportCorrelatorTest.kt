@@ -20,13 +20,13 @@ import okhttp3.WebSocketListener
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okio.ByteString.Companion.encodeUtf8
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertThrows
-import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Test
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -41,7 +41,7 @@ class WebSocketTransportCorrelatorTest {
     private lateinit var ioScope: CoroutineScope
     private val serverSockets = CopyOnWriteArrayList<WebSocket>()
 
-    @BeforeEach
+    @Before
     fun setUp() {
         serverSockets.clear()
         server = MockWebServer()
@@ -54,7 +54,7 @@ class WebSocketTransportCorrelatorTest {
         ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     }
 
-    @AfterEach
+    @After
     fun tearDown() {
         serverSockets.forEach { it.close(NORMAL_CLOSE_CODE, "teardown") }
         serverSockets.clear()
@@ -65,7 +65,7 @@ class WebSocketTransportCorrelatorTest {
     }
 
     @Test
-    fun testCorrelatesIncomingJsonRpcSuccessAndErrorFramesOverWebSocket() = runBlocking {
+    fun testCorrelatesIncomingJsonRpcSuccessAndErrorFramesOverWebSocket() : Unit = runBlocking {
         val serverWsDeferred = enqueueUpgrade()
         val transport = createTransport()
 
@@ -121,7 +121,7 @@ class WebSocketTransportCorrelatorTest {
     }
 
     @Test
-    fun testCorrelatesBinaryUtf8AndHeaderKeyedJsonFramesOverWebSocket() = runBlocking {
+    fun testCorrelatesBinaryUtf8AndHeaderKeyedJsonFramesOverWebSocket() : Unit = runBlocking {
         val serverWsDeferred = enqueueUpgrade()
         val transport = createTransport()
 
@@ -153,7 +153,7 @@ class WebSocketTransportCorrelatorTest {
     }
 
     @Test
-    fun testLegacyReceiptRegistrationAlsoEmitsCorrelationEvent() = runBlocking {
+    fun testLegacyReceiptRegistrationAlsoEmitsCorrelationEvent() : Unit = runBlocking {
         val serverWsDeferred = enqueueUpgrade()
         val transport = createTransport()
 
@@ -187,7 +187,7 @@ class WebSocketTransportCorrelatorTest {
     }
 
     @Test
-    fun testConcurrentWebSocketFrameCorrelationAndCancelUnderLoad() = runBlocking {
+    fun testConcurrentWebSocketFrameCorrelationAndCancelUnderLoad() : Unit = runBlocking {
         val serverWsDeferred = enqueueUpgrade()
         val transport = createTransport()
 
@@ -232,10 +232,10 @@ class WebSocketTransportCorrelatorTest {
             serverWs.send(batch)
 
             assertTrue(
-                allMatchedLatch.await(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS),
-                "Expected all non-cancelled requests to correlate"
+                "Expected all non-cancelled requests to correlate",
+                allMatchedLatch.await(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             )
-            assertFalse(cancelledHit.get(), "Cancelled requests must never emit events")
+            assertFalse("Cancelled requests must never emit events", cancelledHit.get())
             assertEquals(expectedMatchedCount, matchedIds.size)
             assertEquals(0, transport.pendingCount())
             assertEquals(expectedMatchedCount, transport.getCorrelatedFramesCount())
@@ -245,7 +245,7 @@ class WebSocketTransportCorrelatorTest {
     }
 
     @Test
-    fun testCloseClearsPendingRequestsAndRejectsNewRegistration() = runBlocking {
+    fun testCloseClearsPendingRequestsAndRejectsNewRegistration() : Unit = runBlocking {
         val transport = createTransport()
         transport.registerRequest("pending-before-close")
         assertEquals(1, transport.pendingCount())
