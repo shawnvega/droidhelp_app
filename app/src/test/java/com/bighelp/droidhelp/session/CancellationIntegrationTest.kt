@@ -18,6 +18,7 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.rules.Timeout
@@ -29,6 +30,7 @@ class CancellationIntegrationTest {
 
     private lateinit var server: MockWebServer
     private lateinit var scope: CoroutineScope
+    private var transport: WebSocketTransport? = null
 
     @Before
     fun setup() {
@@ -39,6 +41,7 @@ class CancellationIntegrationTest {
 
     @After
     fun teardown() {
+        transport?.close()
         server.shutdown()
         scope.cancel()
     }
@@ -62,6 +65,7 @@ class CancellationIntegrationTest {
 
         // 2. Connect WebSocketTransport and create Session
         val transport = WebSocketTransport.create(endpoint, scope = scope)
+        this.transport = transport
         
         // Start the connection process
         val connectionJob = launch { transport.connect() }
@@ -102,18 +106,22 @@ class CancellationIntegrationTest {
         assertEquals(runtimeSessionId, result.sessionId)
         assertEquals(socketHandle.handleId, result.socketHandleId)
 
-        // Verify the request sent to MockWebServer
+        // Consume the WebSocket upgrade request, then verify the HTTP DELETE request
+        val wsRequest = server.takeRequest(REQUEST_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        assertNotNull(wsRequest)
+        assertEquals("GET", wsRequest?.method)
         val request = server.takeRequest(REQUEST_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         assertNotNull(request)
         assertEquals("DELETE", request?.method)
-        assertEquals("/api/sessions/$runtimeSessionId", request?.path)
+        assertEquals("/api/sessions/$runtimeSessionId?profile=$profile", request?.path)
         
         // Verify transport state
         assertEquals(WebSocketTransport.ConnectionState.DISCONNECTED, transport.connectionState.value)
-        assertTrue(transport.isClosed())
+        assertFalse(transport.isClosed())
 
         // 5. Cleanup
         transport.close()
+        assertTrue(transport.isClosed())
     }
 
     companion object {
