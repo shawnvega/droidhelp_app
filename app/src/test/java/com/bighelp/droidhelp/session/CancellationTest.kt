@@ -25,14 +25,14 @@ import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
 import okio.ByteString
 import org.junit.After
+import org.junit.Before
+import org.junit.Test
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
-import org.junit.Before
-import org.junit.Test
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -132,40 +132,40 @@ class CancellationTest {
     }
 
     @Test
-    fun `cancelSession with Session uses runtimeSessionId when attached and sends profile and custom headers`() =
+    fun `cancelSession with Session uses runtimeSessionId when attached and sends profile and custom headers`() = 
         runTest {
-            server.enqueue(MockResponse().setResponseCode(204))
+        server.enqueue(MockResponse().setResponseCode(204))
 
-            val session = Session.create(
-                durableSessionId = "durable-abc",
-                source = SessionCoordinator.SOURCE,
-                profile = "research",
-                runtimeSessionId = "runtime-xyz",
-            )
-            val cancellation = SessionCancellation(
-                httpClient = httpClient,
-                endpoint = endpoint,
-                headers = mapOf("Authorization" to "Bearer tok-123"),
-                requestIdGenerator = { "req-sess-1" },
-                handleIdGenerator = { "handle-sess-1" },
-            )
-            val handle = cancellation.createSocketHandle(session)
+        val session = Session.create(
+            durableSessionId = "durable-abc",
+            source = SessionCoordinator.SOURCE,
+            profile = "research",
+            runtimeSessionId = "runtime-xyz",
+        )
+        val cancellation = SessionCancellation(
+            httpClient = httpClient,
+            endpoint = endpoint,
+            headers = mapOf("Authorization" to "Bearer tok-123"),
+            requestIdGenerator = { "req-sess-1" },
+            handleIdGenerator = { "handle-sess-1" },
+        )
+        val handle = cancellation.createSocketHandle(session)
 
-            val result = cancellation.cancelSession(
-                session = session,
-                socketHandle = handle,
-            )
+        val result = cancellation.cancelSession(
+            session = session,
+            socketHandle = handle,
+        )
 
-            val recorded = server.takeRequest(5, TimeUnit.SECONDS)!!
-            assertEquals("DELETE", recorded.method)
-            assertEquals("/api/sessions/runtime-xyz?profile=research", recorded.path)
-            assertEquals("Bearer tok-123", recorded.getHeader("Authorization"))
-            assertEquals("handle-sess-1", recorded.getHeader(SessionCancellation.HEADER_SOCKET_HANDLE))
-            assertEquals("req-sess-1", recorded.getHeader(SessionCancellation.HEADER_REQUEST_ID))
-            assertEquals(204, result.httpStatusCode)
-            assertEquals("runtime-xyz", result.sessionId)
-            assertTrue(handle.isClosed)
-        }
+        val recorded = server.takeRequest(5, TimeUnit.SECONDS)!!
+        assertEquals("DELETE", recorded.method)
+        assertEquals("/api/sessions/runtime-xyz?profile=research", recorded.path)
+        assertEquals("Bearer tok-123", recorded.getHeader("Authorization"))
+        assertEquals("handle-sess-1", recorded.getHeader(SessionCancellation.HEADER_SOCKET_HANDLE))
+        assertEquals("req-sess-1", recorded.getHeader(SessionCancellation.HEADER_REQUEST_ID))
+        assertEquals(204, result.httpStatusCode)
+        assertEquals("runtime-xyz", result.sessionId)
+        assertTrue(handle.isClosed)
+    }
 
     @Test
     fun `cancelSession supports POST method, ws scheme conversion, deploymentPrefix, and path`() = runTest {
@@ -508,6 +508,7 @@ class CancellationTest {
         assertEquals(WebSocketTransport.NORMAL_CLOSURE_CODE, closedCode)
         val actualReason = closedReason!!
         assertTrue(actualReason.toByteArray(Charsets.UTF_8).size <= 123)
+        // 40 * 4-byte emoji = 160 UTF-8 bytes (> 123 RFC 6455 limit)
         // 123 / 4 = 30 complete rocket emojis (120 UTF-8 bytes) with no split surrogate
         assertEquals("\uD83D\uDE80".repeat(30), actualReason)
     }
@@ -604,6 +605,50 @@ class CancellationTest {
             assertFalse(handle.isClosed)
         } finally {
             testScope.cancel()
+        }
+    }
+
+    @Test
+    fun `queued response remains cancellable and wrong requestId cannot retire it`() {
+        val cancellation = SessionCancellation(httpClient = httpClient, endpoint = endpoint)
+        val handle = SocketHandle.generate(sessionId = "sess-1", socketGeneration = 1L)
+        assertEquals(
+            RequestRegistrationResult.ACCEPTED,
+            cancellation.registerPendingRequest(handle, "orig-id", "approval"),
+        )
+        assertTrue(cancellation.stageResponse(handle, "orig-id", "approval"))
+
+        // Wrong requestId cannot retire it
+        assertFalse(
+            cancellation.cancelPendingRequest(
+                handle,
+                ServerRequestCancellation(id = "wrong-id", method = "approval", reason = "expired"),
+            ),
+        )
+        assertEquals(1, cancellation.pendingRequestCount)
+    }
+
+    @Test
+    fun `activePendingRequests returns correct keys`() {
+        val cancellation = SessionCancellation(httpClient = httpClient, endpoint = endpoint)
+        val handle = SocketHandle.generate(sessionId = "sess-1", socketGeneration = 1L)
+        cancellation.registerPendingRequest(handle, "req-1", "GET")
+        cancellation.registerPendingRequest(handle, "req-2", "POST")
+
+        val active = cancellation.activePendingRequests
+        assertEquals(2, active.size)
+        assertTrue(active.contains(PendingRequestKey(1L, "req-1", "GET")))
+        assertTrue(active.contains(PendingRequestKey(1L, "req-2", "POST")))
+    }
+
+    @Test
+    fun `registration rejects non-printable ASCII methods`() {
+        val cancellation = SessionCancellation(httpClient = httpClient, endpoint = endpoint)
+        val handle = SocketHandle.generate(sessionId = "sess-1", socketGeneration = 1L)
+        // Space is not allowed in printable ASCII according to the requirement in Cancellation.kt
+        // (ASCII_PRINTABLE_MIN = 33, which is '!')
+        assertThrows(IllegalArgumentException::class.java) {
+            cancellation.registerPendingRequest(handle, "req-1", "GET ")
         }
     }
 }
