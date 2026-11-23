@@ -70,19 +70,16 @@ WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints
 To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
 Add android.sync.suppressAgpWarnings=LIBRARY_CONSTRAINTS_SHOULD_BE_DISABLED to the gradle.properties file to suppress this warning.
 
-> Task :app:detekt
-/opt/data/projects/droidhelp/app/src/main/java/com/bighelp/droidhelp/home/NewChatScreen.kt:4:1: androidx.compose.foundation.layout.* is a wildcard import. Replace it with fully qualified imports. [WildcardImport]
-/opt/data/projects/droidhelp/app/src/main/java/com/bighelp/droidhelp/home/NewChatScreen.kt:12:1: androidx.compose.material3.* is a wildcard import. Replace it with fully qualified imports. [WildcardImport]
-/opt/data/projects/droidhelp/app/src/main/java/com/bighelp/droidhelp/home/NewChatScreen.kt:38:5: Function parameter `onStartChat` is unused. [UnusedParameter]
-
-
 > Task :app:detekt FAILED
+/opt/data/projects/droidhelp/app/src/main/java/com/bighelp/droidhelp/home/Navigation.kt:26:5: Function parameter names should match the pattern: [a-z][A-Za-z0-9]* [FunctionParameterNaming]
+/opt/data/projects/droidhelp/app/src/main/java/com/bighelp/droidhelp/home/Navigation.kt:26:5: Function parameter `_appState` is unused. [UnusedParameter]
+
 
 FAILURE: Build failed with an exception.
 
 * What went wrong:
 Execution failed for task ':app:detekt' (registered by plugin 'io.gitlab.arturbosch.detekt').
-> Analysis failed with 3 weighted issues.
+> Analysis failed with 2 weighted issues.
 
 * Try:
 > Run with --stacktrace option to get the stack trace.
@@ -90,5 +87,5 @@ Execution failed for task ':app:detekt' (registered by plugin 'io.gitlab.arturbo
 > Run with --scan to get full insights from a Build Scan (powered by Develocity).
 > Get more help at https://help.gradle.org.
 
-BUILD FAILED in 26s
+BUILD FAILED in 27s
 1 actionable task: 1 executed

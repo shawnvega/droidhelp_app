@@ -38,6 +38,22 @@ data class NewChatUiState(
     val showCodingOptions: Boolean = false
 )
 
+fun toggleRecipientSelection(state: NewChatUiState, recipientId: String): NewChatUiState {
+    val newSelectedIds = if (state.selectedIds.contains(recipientId)) {
+        state.selectedIds - recipientId
+    } else {
+        state.selectedIds + recipientId
+    }
+
+    val botCount = state.recipients.count { it.id in newSelectedIds && it.isBot }
+    return state.copy(
+        selectedIds = newSelectedIds,
+        showCodingOptions = botCount == 1
+    )
+}
+
+fun canStartNewChat(state: NewChatUiState): Boolean = state.selectedIds.isNotEmpty()
+
 fun filterRecipients(recipients: List<NewChatRecipient>, query: String): List<NewChatRecipient> {
     if (query.isEmpty()) return recipients
     return recipients.filter { it.name.contains(query, ignoreCase = true) }
