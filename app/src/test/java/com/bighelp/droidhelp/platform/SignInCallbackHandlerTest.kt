@@ -35,11 +35,7 @@ class SignInCallbackHandlerTest {
         }
 
         override suspend fun upload(
-            url: String,
-            name: String,
-            fileName: String,
-            mimeType: String,
-            data: ByteArray,
+            payload: UploadPayload,
             onProgress: (Float) -> Unit
         ): Response {
             onProgress(1f)
@@ -48,7 +44,7 @@ class SignInCallbackHandlerTest {
                 ""
             )
             return Response.Builder()
-                .request(Request.Builder().url(url).build())
+                .request(Request.Builder().url(payload.url).build())
                 .protocol(Protocol.HTTP_1_1)
                 .code(200)
                 .message("OK")
@@ -254,16 +250,12 @@ class SignInCallbackHandlerTest {
             }
 
             override suspend fun upload(
-                url: String,
-                name: String,
-                fileName: String,
-                mimeType: String,
-                data: ByteArray,
+                payload: UploadPayload,
                 onProgress: (Float) -> Unit
             ): Response {
                 onProgress(1f)
                 return Response.Builder()
-                    .request(Request.Builder().url(url).build())
+                    .request(Request.Builder().url(payload.url).build())
                     .protocol(Protocol.HTTP_1_1)
                     .code(500)
                     .message("Internal Server Error")
@@ -303,16 +295,12 @@ class SignInCallbackHandlerTest {
             }
 
             override suspend fun upload(
-                url: String,
-                name: String,
-                fileName: String,
-                mimeType: String,
-                data: ByteArray,
+                payload: UploadPayload,
                 onProgress: (Float) -> Unit
             ): Response {
                 onProgress(1f)
                 return Response.Builder()
-                    .request(Request.Builder().url(url).build())
+                    .request(Request.Builder().url(payload.url).build())
                     .protocol(Protocol.HTTP_1_1)
                     .code(200)
                     .message("OK")

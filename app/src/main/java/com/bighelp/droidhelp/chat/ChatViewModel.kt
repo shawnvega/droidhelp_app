@@ -3,9 +3,14 @@ package com.bighelp.droidhelp.chat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bighelp.droidhelp.platform.HttpClient
-import java.util.*
-import kotlinx.coroutines.flow.*
+import com.bighelp.droidhelp.platform.UploadPayload
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.io.IOException
+import java.util.Date
+import java.util.UUID
 
 class ChatViewModel(
     private val httpClient: HttpClient,
@@ -59,34 +64,36 @@ class ChatViewModel(
     }
 
     private fun startUpload(attachment: ChatAttachment) {
+        fun setStatus(status: AttachmentStatus) {
+            _draftAttachments.value = _draftAttachments.value.map {
+                if (it.id == attachment.id) it.copy(status = status) else it
+            }
+        }
         viewModelScope.launch {
             try {
-                updateAttachmentStatus(attachment.id, AttachmentStatus.Uploading(0f))
-                
-                val response = httpClient.upload(
+                setStatus(AttachmentStatus.Uploading(0f))
+
+                val payload = UploadPayload(
                     url = "/api/upload",
                     name = "file",
                     fileName = attachment.fileName,
                     mimeType = attachment.mimeType,
-                    data = attachment.data
-                ) { progress ->
-                    updateAttachmentStatus(attachment.id, AttachmentStatus.Uploading(progress))
+                    data = attachment.data,
+                )
+                val response = httpClient.upload(payload) { progress ->
+                    setStatus(AttachmentStatus.Uploading(progress))
                 }
 
                 if (response.isSuccessful) {
-                    updateAttachmentStatus(attachment.id, AttachmentStatus.Sent)
+                    setStatus(AttachmentStatus.Sent)
                 } else {
-                    updateAttachmentStatus(attachment.id, AttachmentStatus.Failed("Upload failed: ${response.code}"))
+                    setStatus(AttachmentStatus.Failed("Upload failed: ${response.code}"))
                 }
-            } catch (e: Exception) {
-                updateAttachmentStatus(attachment.id, AttachmentStatus.Failed(e.message ?: "Unknown error"))
+            } catch (e: IOException) {
+                setStatus(AttachmentStatus.Failed(e.message ?: "Unknown error"))
+            } catch (e: IllegalStateException) {
+                setStatus(AttachmentStatus.Failed(e.message ?: "Unknown error"))
             }
-        }
-    }
-
-    private fun updateAttachmentStatus(id: String, status: AttachmentStatus) {
-        _draftAttachments.value = _draftAttachments.value.map {
-            if (it.id == id) it.copy(status = status) else it
         }
     }
 
@@ -177,8 +184,6 @@ class ChatViewModel(
                 onSendMessage(text) {
                     // This block is for assistant updates
                 }
-            } catch (e: Exception) {
-                // In a real app, we might want to handle this
             } finally {
                 _isSending.value = false
             }

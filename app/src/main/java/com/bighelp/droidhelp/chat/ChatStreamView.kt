@@ -1,17 +1,27 @@
 package com.bighelp.droidhelp.chat
 
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.bighelp.droidhelp.designsystem.Theme
-import java.util.*
-import kotlinx.coroutines.delay
+import java.util.Date
+
+private const val MS_PER_SECOND = 1000L
 
 @Composable
 fun ChatStreamView(
@@ -72,8 +82,16 @@ private fun ChatRow(item: TimelineItem) {
 
 @Composable
 private fun MessageBubble(text: String, isHuman: Boolean) {
-    val bubbleColor = if (isHuman) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer
-    val textColor = if (isHuman) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSecondaryContainer
+    val bubbleColor = if (isHuman) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        MaterialTheme.colorScheme.secondaryContainer
+    }
+    val textColor = if (isHuman) {
+        MaterialTheme.colorScheme.onPrimaryContainer
+    } else {
+        MaterialTheme.colorScheme.onSecondaryContainer
+    }
 
     Surface(
         color = bubbleColor,
@@ -100,7 +118,7 @@ private fun ReasoningBlock(
         } else {
             val now = Date()
             val diff = now.time - (timestamp?.time ?: now.time)
-            val seconds = diff / 1000
+            val seconds = diff / MS_PER_SECOND
             "Thought for $seconds seconds"
         }
     }

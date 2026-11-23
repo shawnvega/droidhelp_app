@@ -60,12 +60,20 @@ class CancellationIntegrationTest {
         println("DEBUG: WS URL: ${endpoint.canonical}")
 
         // Prepare responses for the WebSocket handshake and the subsequent DELETE request
-        server.enqueue(MockResponse().withWebSocketUpgrade(object : okhttp3.WebSocketListener() {}))
+        server.enqueue(
+            MockResponse().withWebSocketUpgrade(
+                object : okhttp3.WebSocketListener() {
+                    override fun onClosing(webSocket: okhttp3.WebSocket, code: Int, reason: String) {
+                        webSocket.close(code, reason)
+                    }
+                }
+            )
+        )
         server.enqueue(MockResponse().setResponseCode(200))
 
         // 2. Connect WebSocketTransport and create Session
         val newTransport = WebSocketTransport.create(endpoint, scope = scope)
-        this.t = newTransport
+        t = newTransport
         
         // Start the connection process
         val connectionJob = launch { newTransport.connect() }

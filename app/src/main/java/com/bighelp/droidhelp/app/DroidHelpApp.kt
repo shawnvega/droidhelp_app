@@ -1,6 +1,7 @@
 package com.bighelp.droidhelp.app
 
 import androidx.compose.runtime.*
+import com.bighelp.droidhelp.designsystem.ColorMode
 import com.bighelp.droidhelp.home.model.*
 import java.util.UUID
 
@@ -16,8 +17,8 @@ data class PendingShareHandoff(
 )
 
 class AppState(val home: HomeSelection) {
+    var colorMode by mutableStateOf<ColorMode>(ColorMode.Dynamic)
     var path by mutableStateOf<List<AppRoute>>(emptyList())
-
     var activeConversationID by mutableStateOf<String?>(null)
     var deviceToolConversationID by mutableStateOf<String?>(null)
     var pendingVoiceConversationID by mutableStateOf<String?>(null)
@@ -54,9 +55,4 @@ class AppState(val home: HomeSelection) {
     fun activateConversation(id: String) {
         activeConversationID = id
     }
-}
-
-@Composable
-fun DroidHelpApp(appState: AppState) {
-    AppComposition(appState = appState)
 }

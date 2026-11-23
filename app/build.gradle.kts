@@ -77,18 +77,21 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.security.crypto)
-
+    
     debugImplementation(libs.ui.tooling.core)
     
     testImplementation(libs.junit4)
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
-    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
-    testImplementation("org.robolectric:robolectric:4.11.1")
-    testImplementation("androidx.test:core:1.5.0")
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.mockwebserver)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
+    testImplementation(libs.junit.vintage.engine)
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.junit4)
-    androidTestImplementation("androidx.test.ext:junit:1.2.1")
-    androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.espresso.core)
 }
 
 detekt {
@@ -100,6 +103,7 @@ detekt {
 }
 
 tasks.withType<Test>().configureEach {
+    useJUnitPlatform()
     timeout.set(Duration.ofMinutes(2))
     systemProperty("kotlinx.coroutines.test.default_timeout", "10s")
     testLogging {

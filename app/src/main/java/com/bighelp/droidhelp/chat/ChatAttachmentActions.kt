@@ -5,7 +5,11 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.FileProvider
 import java.io.File
@@ -30,21 +34,13 @@ fun rememberChatAttachmentActions(
         ActivityResultContracts.PickVisualMedia()
     ) { uri ->
         uri?.let {
-            val bytes = context.contentResolver.openInputStream(it)?.use { inputStream ->
-                inputStream.readBytes()
-            }
-            if (bytes != null) {
-                val fileName = it.lastPathSegment ?: "image.jpg"
-                val mimeType = context.contentResolver.getType(it) ?: "image/jpeg"
-                onAttachmentAdded(
-                    ChatAttachment(
-                        fileName = fileName,
-                        mimeType = mimeType,
-                        data = bytes,
-                        kind = AttachmentKind.IMAGE
-                    )
-                )
-            }
+            readAttachmentFromUri(
+                context = context,
+                uri = it,
+                defaultFileName = "image.jpg",
+                defaultMimeType = "image/jpeg",
+                forceImage = true,
+            )?.let(onAttachmentAdded)
         }
     }
 
@@ -52,42 +48,27 @@ fun rememberChatAttachmentActions(
         ActivityResultContracts.GetContent()
     ) { uri ->
         uri?.let {
-            val bytes = context.contentResolver.openInputStream(it)?.use { inputStream ->
-                inputStream.readBytes()
-            }
-            if (bytes != null) {
-                val fileName = it.lastPathSegment ?: "file"
-                val mimeType = context.contentResolver.getType(it) ?: "application/octet-stream"
-                onAttachmentAdded(
-                    ChatAttachment(
-                        fileName = fileName,
-                        mimeType = mimeType,
-                        data = bytes,
-                        kind = if (mimeType.startsWith("image/")) AttachmentKind.IMAGE else AttachmentKind.FILE
-                    )
-                )
-            }
+            readAttachmentFromUri(
+                context = context,
+                uri = it,
+                defaultFileName = "file",
+                defaultMimeType = "application/octet-stream",
+            )?.let(onAttachmentAdded)
         }
     }
 
     val cameraLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.TakePicture()
     ) { success ->
-        if (success && cameraUri != null) {
-            val uri = cameraUri!!
-            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-            if (bytes != null) {
-                val fileName = uri.lastPathSegment ?: "camera_capture.jpg"
-                val mimeType = context.contentResolver.getType(uri) ?: "image/jpeg"
-                onAttachmentAdded(
-                    ChatAttachment(
-                        fileName = fileName,
-                        mimeType = mimeType,
-                        data = bytes,
-                        kind = AttachmentKind.IMAGE
-                    )
-                )
-            }
+        val capturedUri = cameraUri
+        if (success && capturedUri != null) {
+            readAttachmentFromUri(
+                context = context,
+                uri = capturedUri,
+                defaultFileName = "camera_capture.jpg",
+                defaultMimeType = "image/jpeg",
+                forceImage = true,
+            )?.let(onAttachmentAdded)
         }
     }
 
@@ -107,4 +88,27 @@ fun rememberChatAttachmentActions(
             filePickerLauncher.launch("*/*")
         }
     }
+}
+
+private fun readAttachmentFromUri(
+    context: Context,
+    uri: Uri,
+    defaultFileName: String,
+    defaultMimeType: String,
+    forceImage: Boolean = false,
+): ChatAttachment? {
+    val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
+    val fileName = uri.lastPathSegment ?: defaultFileName
+    val mimeType = context.contentResolver.getType(uri) ?: defaultMimeType
+    val kind = if (forceImage || mimeType.startsWith("image/")) {
+        AttachmentKind.IMAGE
+    } else {
+        AttachmentKind.FILE
+    }
+    return ChatAttachment(
+        fileName = fileName,
+        mimeType = mimeType,
+        data = bytes,
+        kind = kind,
+    )
 }
