@@ -91,10 +91,18 @@ Add android.sync.suppressAgpWarnings=LIBRARY_CONSTRAINTS_SHOULD_BE_DISABLED to t
 > Task :app:javaPreCompileDebug UP-TO-DATE
 > Task :app:preDebugUnitTestBuild UP-TO-DATE
 > Task :app:javaPreCompileDebugUnitTest UP-TO-DATE
-> Task :app:compileDebugKotlin
-e: file:///opt/data/projects/droidhelp/app/src/main/java/com/bighelp/droidhelp/chat/ChatCitationView.kt:43:5 The API of this layout is experimental and is likely to change in the future.
 
 > Task :app:compileDebugKotlin FAILED
+e: file:///opt/data/projects/droidhelp/app/src/main/java/com/bighelp/droidhelp/home/NewChatScreen.kt:8:8 Packages cannot be imported.
+e: file:///opt/data/projects/droidhelp/app/src/main/java/com/bighelp/droidhelp/home/NewChatScreen.kt:8:17 Syntax error: Import must be placed on a single line.
+e: file:///opt/data/projects/droidhelp/app/src/main/java/com/bighelp/droidhelp/home/NewChatScreen.kt:74:49 Unresolved reference 'size'.
+e: file:///opt/data/projects/droidhelp/app/src/main/java/com/bighelp/droidhelp/home/NewChatScreen.kt:87:26 Unresolved reference 'TextFieldDefaults'.
+e: file:///opt/data/projects/droidhelp/app/src/main/java/com/bighelp/droidhelp/home/NewChatScreen.kt:111:46 Unresolved reference 'items'.
+e: file:///opt/data/projects/droidhelp/app/src/main/java/com/bighelp/droidhelp/home/NewChatScreen.kt:111:74 Cannot infer type for this parameter. Specify it explicitly.
+e: file:///opt/data/projects/droidhelp/app/src/main/java/com/bighelp/droidhelp/home/NewChatScreen.kt:112:17 @Composable invocations can only happen from the context of a @Composable function
+e: file:///opt/data/projects/droidhelp/app/src/main/java/com/bighelp/droidhelp/home/NewChatScreen.kt:113:56 Unresolved reference 'name'.
+e: file:///opt/data/projects/droidhelp/app/src/main/java/com/bighelp/droidhelp/home/NewChatScreen.kt:115:39 Unresolved reference 'isBot'.
+e: file:///opt/data/projects/droidhelp/app/src/main/java/com/bighelp/droidhelp/home/NewChatScreen.kt:119:81 Unresolved reference 'id'.
 
 FAILURE: Build failed with an exception.
 
@@ -109,7 +117,5 @@ Execution failed for task ':app:compileDebugKotlin' (registered by plugin 'org.j
 > Run with --scan to get full insights from a Build Scan (powered by Develocity).
 > Get more help at https://help.gradle.org.
 
-BUILD FAILED in 2m 40s
-18 actionable tasks: 1 executed, 17 up-to-date
-
+BUILD FAILED in 25s
 18 actionable tasks: 1 executed, 17 up-to-date
