@@ -26,6 +26,10 @@ private const val MS_PER_SECOND = 1000L
 @Composable
 fun ChatStreamView(
     items: List<TimelineItem>,
+    reactionsByMessageId: Map<String, List<MessageReaction>> = emptyMap(),
+    cardsByMessageId: Map<String, List<ChatCard>> = emptyMap(),
+    onToggleReaction: (String, String) -> Unit = { _, _ -> },
+    onCardAction: (ChatCardAction) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
@@ -43,13 +47,25 @@ fun ChatStreamView(
         contentPadding = PaddingValues(16.dp)
     ) {
         items(items, key = { it.id }) { item ->
-            ChatRow(item = item)
+            ChatRow(
+                item = item,
+                reactionsByMessageId = reactionsByMessageId,
+                cardsByMessageId = cardsByMessageId,
+                onToggleReaction = onToggleReaction,
+                onCardAction = onCardAction
+            )
         }
     }
 }
 
 @Composable
-private fun ChatRow(item: TimelineItem) {
+private fun ChatRow(
+    item: TimelineItem,
+    reactionsByMessageId: Map<String, List<MessageReaction>> = emptyMap(),
+    cardsByMessageId: Map<String, List<ChatCard>> = emptyMap(),
+    onToggleReaction: (String, String) -> Unit = { _, _ -> },
+    onCardAction: (ChatCardAction) -> Unit = {}
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -65,6 +81,36 @@ private fun ChatRow(item: TimelineItem) {
         when (val content = item.content) {
             is TimelineContent.Message -> {
                 MessageBubble(text = content.text, isHuman = item.role == TimelineRole.HUMAN)
+
+                if (item.role != TimelineRole.HUMAN) {
+                    val citations = ChatCitations.parse(content.text)
+                    if (citations.isNotEmpty()) {
+                        ChatCitationChips(citations = citations)
+                    }
+                }
+
+                cardsByMessageId[item.id].orEmpty().forEach { card ->
+                    ChatCardView(
+                        card = card,
+                        onAction = onCardAction,
+                        onCardClick = {}
+                    )
+                }
+
+                val messageReactions = reactionsByMessageId[item.id].orEmpty()
+                if (messageReactions.isNotEmpty()) {
+                    val counts = messageReactions.groupingBy { it.emoji }.eachCount()
+                    val selectedEmoji = messageReactions.find { it.author == ReactionAuthor.USER }?.emoji
+                    ChatReactionBar(
+                        state = ChatReactionState(
+                            reactions = counts,
+                            selectedEmoji = selectedEmoji
+                        ),
+                        onSelection = { emoji ->
+                            onToggleReaction(item.id, emoji ?: "")
+                        }
+                    )
+                }
             }
             is TimelineContent.Reasoning -> {
                 ReasoningBlock(
