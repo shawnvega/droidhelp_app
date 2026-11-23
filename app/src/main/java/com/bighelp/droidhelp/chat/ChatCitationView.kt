@@ -20,6 +20,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
+private val CHIP_SPACING = 8.dp
+private val TEXT_SPACER_HEIGHT = 8.dp
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ChatCitationChips(
@@ -30,7 +33,7 @@ fun ChatCitationChips(
 
     FlowRow(
         modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        horizontalArrangement = Arrangement.spacedBy(CHIP_SPACING)
     ) {
         citations.forEach { citation ->
             val label = "[${citation.index}] ${citation.title ?: citation.url}"
@@ -41,8 +44,8 @@ fun ChatCitationChips(
         }
     }
 
-    if (selectedCitation != null) {
-        val citation = selectedCitation!!
+    val currentCitation = selectedCitation
+    if (currentCitation != null) {
         AlertDialog(
             onDismissRequest = { selectedCitation = null },
             confirmButton = {
@@ -52,7 +55,7 @@ fun ChatCitationChips(
             },
             title = {
                 Text(
-                    text = citation.title ?: citation.url,
+                    text = currentCitation.title ?: currentCitation.url,
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold
                 )
@@ -60,13 +63,13 @@ fun ChatCitationChips(
             text = {
                 Column {
                     Text(
-                        text = citation.url,
+                        text = currentCitation.url,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.primary
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(TEXT_SPACER_HEIGHT))
                     Text(
-                        text = citation.snippet ?: "",
+                        text = currentCitation.snippet ?: "",
                         style = MaterialTheme.typography.bodyMedium
                     )
                 }
