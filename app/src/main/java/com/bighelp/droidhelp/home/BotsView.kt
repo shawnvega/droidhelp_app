@@ -38,6 +38,19 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
+fun filterAndSortBots(items: List<BotsItem>, query: String): List<BotsItem> {
+    val trimmedQuery = query.trim()
+    return items.filter { item ->
+        trimmedQuery.isEmpty() ||
+                item.title.contains(trimmedQuery, ignoreCase = true) ||
+                item.preview?.contains(trimmedQuery, ignoreCase = true) == true
+    }.sortedWith(
+        compareByDescending<BotsItem> { it.isPinned }
+            .thenByDescending { it.updatedAt }
+            .thenBy { it.title }
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BotsView(
@@ -46,25 +59,11 @@ fun BotsView(
 ) {
     var searchQuery by remember { mutableStateOf("") }
 
-    val filteredItems = remember(items, searchQuery) {
-        val query = searchQuery.trim()
-        items.filter { item ->
-            query.isEmpty() || 
-                item.title.contains(query, ignoreCase = true) || 
-                item.preview?.contains(query, ignoreCase = true) == true
-        }
+    val sortedItems = remember(items, searchQuery) {
+        filterAndSortBots(items, searchQuery)
     }
 
-    // Sort: pinned first, then by updatedAt (desc), then by title
-    val sortedItems = remember(filteredItems) {
-        filteredItems.sortedWith(
-            compareByDescending<BotsItem> { it.isPinned }
-                .thenByDescending { it.updatedAt }
-                .thenBy { it.title }
-        )
-    }
-
-    Column(modifier = Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.White)) {
+    Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         // Search Bar
         TextField(
             value = searchQuery,

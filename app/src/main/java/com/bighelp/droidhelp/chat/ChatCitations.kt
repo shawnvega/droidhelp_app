@@ -83,10 +83,6 @@ object ChatCitations {
             }
             .sortedBy { it.index }
 
-        println("DEBUG: definitions=$definitions")
-        println("DEBUG: referencedIndices=$referencedIndices")
-        println("DEBUG: result=$result")
-        
         return result
     }
 

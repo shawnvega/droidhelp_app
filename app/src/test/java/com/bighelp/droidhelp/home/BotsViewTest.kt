@@ -1,78 +1,96 @@
 package com.bighelp.droidhelp.home
 
-import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.performTextInput
-import org.junit.Rule
+import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class BotsViewTest {
 
-    @get:Rule
-    val composeTestRule = createComposeRule()
+    private val item1 = BotsItem(
+        id = "1",
+        title = "Alpha",
+        role = "Role A",
+        preview = "Preview Alpha",
+        isPinned = false,
+        isUnread = false,
+        updatedAt = 1000L
+    )
+
+    private val item2 = BotsItem(
+        id = "2",
+        title = "Beta",
+        role = "Role B",
+        preview = "Preview Beta",
+        isPinned = true,
+        isUnread = false,
+        updatedAt = 2000L
+    )
+
+    private val item3 = BotsItem(
+        id = "3",
+        title = "Gamma",
+        role = "Role C",
+        preview = "Preview Gamma",
+        isPinned = false,
+        isUnread = false,
+        updatedAt = 1500L
+    )
 
     @Test
-    fun testSortingAndFiltering() {
-        val items = listOf(
-            BotsItem("1", "Alpha", "Bot", "Preview A", false, false, 100L),
-            BotsItem("2", "Beta", "Bot", "Preview B", true, false, 200L), // Pinned
-            BotsItem("3", "Gamma", "Bot", "Preview C", false, true, 300L), // Unread
-            BotsItem("4", "Delta", "Bot", "Preview D", false, false, 50L)
-        )
-
-        // Expected order:
-        // 1. Beta (pinned)
-        // 2. Gamma (updatedAt 300)
-        // 3. Alpha (updatedAt 100)
-        // 4. Delta (updatedAt 50)
-
-        composeTestRule.setContent {
-            BotsView(items = items, onItemClick = {})
-        }
-
-        // Check order by checking if they are displayed in order
-        // Since it's a LazyColumn, we can check the text presence.
-        // To be sure of order, we can check that Beta is before Gamma etc.
-        // But for this simple test, we'll just verify they all exist.
-        composeTestRule.onNodeWithText("Beta").assertExists()
-        composeTestRule.onNodeWithText("Gamma").assertExists()
-        composeTestRule.onNodeWithText("Alpha").assertExists()
-        composeTestRule.onNodeWithText("Delta").assertExists()
+    fun `filterAndSortBots returns all items when query is empty`() {
+        val items = listOf(item1, item2, item3)
+        val result = filterAndSortBots(items, "")
+        // Note: sorting will still happen
+        // item2 (pinned) should be first
+        // item3 (updatedAt 1500) second
+        // item1 (updatedAt 1000) third
+        assertEquals(3, result.size)
+        assertEquals("2", result[0].id)
+        assertEquals("3", result[1].id)
+        assertEquals("1", result[2].id)
     }
 
     @Test
-    fun testSearch() {
-        val items = listOf(
-            BotsItem("1", "Alpha", "Bot", "Preview A", false, false, 100L),
-            BotsItem("2", "Beta", "Bot", "Preview B", false, false, 200L)
-        )
-
-        composeTestRule.setContent {
-            BotsView(items = items, onItemClick = {})
-        }
-
-        // Type "Al" into search field
-        composeTestRule.onNodeWithTag("search_field").performTextInput("Al")
-
-        // Only Alpha should be visible
-        composeTestRule.onNodeWithText("Alpha").assertExists()
-        composeTestRule.onNodeWithText("Beta").assertDoesNotExist()
+    fun `filterAndSortBots filters by title`() {
+        val items = listOf(item1, item2, item3)
+        val result = filterAndSortBots(items, "Alpha")
+        assertEquals(1, result.size)
+        assertEquals("1", result[0].id)
     }
 
     @Test
-    fun testPinnedFirst() {
-        val items = listOf(
-            BotsItem("1", "Alpha", "Bot", "Preview A", false, false, 100L),
-            BotsItem("2", "Beta", "Bot", "Preview B", true, false, 200L)
-        )
+    fun `filterAndSortBots filters by preview`() {
+        val items = listOf(item1, item2, item3)
+        val result = filterAndSortBots(items, "Beta")
+        assertEquals(1, result.size)
+        assertEquals("2", result[0].id)
+    }
 
-        composeTestRule.setContent {
-            BotsView(items = items, onItemClick = {})
-        }
+    @Test
+    fun `filterAndSortBots sorts pinned first`() {
+        val items = listOf(item1, item2, item3)
+        val result = filterAndSortBots(items, "")
+        // item2 is pinned
+        assertEquals(true, result[0].isPinned)
+        assertEquals("2", result[0].id)
+    }
 
-        // In a real test, we'd want to verify the order. 
-        // For now, let's just ensure Beta is there.
-        composeTestRule.onNodeWithText("Beta").assertExists()
+    @Test
+    fun `filterAndSortBots sorts by updatedAt descending`() {
+        val items = listOf(item1, item3) // both unpinned
+        val result = filterAndSortBots(items, "")
+        // item3 (1500) > item1 (1000)
+        assertEquals("3", result[0].id)
+        assertEquals("1", result[1].id)
+    }
+
+    @Test
+    fun `filterAndSortBots sorts by title ascending as tie-breaker`() {
+        val itemA = item1.copy(id = "A", title = "A", updatedAt = 1000L, isPinned = false)
+        val itemB = item3.copy(id = "B", title = "B", updatedAt = 1000L, isPinned = false)
+        val items = listOf(itemB, itemA)
+        val result = filterAndSortBots(items, "")
+        // Both unpinned, same updatedAt. Sort by title asc.
+        assertEquals("A", result[0].title)
+        assertEquals("B", result[1].title)
     }
 }
