@@ -28,7 +28,14 @@ enum class BotProfileTab(val title: String) {
 data class BotProfileState(
     val botId: String,
     val botName: String,
-    val selectedTab: BotProfileTab = BotProfileTab.DASHBOARD
+    val selectedTab: BotProfileTab = BotProfileTab.DASHBOARD,
+    val role: String = "",
+    val status: String = "Idle",
+    val hostName: String = "localhost",
+    val isConnected: Boolean = true,
+    val files: List<String> = emptyList(),
+    val mediaItems: List<String> = emptyList(),
+    val approvals: List<BotApprovalItem> = emptyList()
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -37,6 +44,9 @@ fun BotProfileScreen(
     state: BotProfileState,
     onSelectTab: (BotProfileTab) -> Unit,
     onBack: () -> Unit,
+    onFileClick: (String) -> Unit = {},
+    onApprove: (String) -> Unit = {},
+    onDeny: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Scaffold(
@@ -69,12 +79,44 @@ fun BotProfileScreen(
             }
 
             when (state.selectedTab) {
-                BotProfileTab.DASHBOARD -> Text("Dashboard Content", modifier = Modifier.padding(16.dp))
-                BotProfileTab.INFO -> Text("Info Content", modifier = Modifier.padding(16.dp))
-                BotProfileTab.COMPUTER -> Text("Computer Content", modifier = Modifier.padding(16.dp))
-                BotProfileTab.FILES -> Text("Files Content", modifier = Modifier.padding(16.dp))
-                BotProfileTab.MEDIA -> Text("Media Content", modifier = Modifier.padding(16.dp))
-                BotProfileTab.APPROVALS -> Text("Approvals Content", modifier = Modifier.padding(16.dp))
+                BotProfileTab.DASHBOARD -> BotDashboardTab(
+                    info = BotOverviewInfo(
+                        botId = state.botId,
+                        botName = state.botName,
+                        role = state.role,
+                        status = state.status
+                    ),
+                    modifier = Modifier.padding(16.dp)
+                )
+                BotProfileTab.INFO -> BotInfoTab(
+                    info = BotOverviewInfo(
+                        botId = state.botId,
+                        botName = state.botName,
+                        role = state.role,
+                        status = state.status
+                    ),
+                    modifier = Modifier.padding(16.dp)
+                )
+                BotProfileTab.COMPUTER -> BotComputerTab(
+                    hostName = state.hostName,
+                    isConnected = state.isConnected,
+                    modifier = Modifier.padding(16.dp)
+                )
+                BotProfileTab.FILES -> BotFilesTab(
+                    files = state.files,
+                    onFileClick = onFileClick,
+                    modifier = Modifier.padding(16.dp)
+                )
+                BotProfileTab.MEDIA -> BotMediaTab(
+                    mediaItems = state.mediaItems,
+                    modifier = Modifier.padding(16.dp)
+                )
+                BotProfileTab.APPROVALS -> BotApprovalsTab(
+                    approvals = state.approvals,
+                    onApprove = onApprove,
+                    onDeny = onDeny,
+                    modifier = Modifier.padding(16.dp)
+                )
             }
         }
     }
