@@ -48,6 +48,32 @@ class AccountSettingsTest {
         }
     }
 
+    @Test
+    fun testSaveAndGetProfile() {
+        runBlocking {
+            val profile = UserProfile(name = "Test User", email = "test@example.com")
+            accountSettings.saveProfile(profile)
+            val retrieved = accountSettings.getProfile()
+            assertEquals(profile.name, retrieved?.name)
+            assertEquals(profile.email, retrieved?.email)
+        }
+    }
+
+    @Test
+    fun testSignOut() {
+        runBlocking {
+            val url = "https://api.example.com/"
+            accountSettings.saveEndpointUrl(url)
+            val profile = UserProfile(name = "Test User")
+            accountSettings.saveProfile(profile)
+            
+            accountSettings.signOut()
+            
+            assertNull(accountSettings.getEndpointUrl())
+            assertNull(accountSettings.getProfile())
+        }
+    }
+
     private class FakeSecureStorage : SecureStorage {
         private val data = mutableMapOf<String, Any>()
 
