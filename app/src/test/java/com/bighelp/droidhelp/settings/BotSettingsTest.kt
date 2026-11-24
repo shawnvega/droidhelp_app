@@ -122,4 +122,58 @@ class BotSettingsTest {
         val nonExistentSettings = BotSettingsOperations.selectBot(settings, "99")
         assertEquals(null, nonExistentSettings.selectedBotId)
     }
+
+    @Test
+    fun testUpsertPrompt() {
+        val bot1 = Bot(id = "1", name = "Bot 1", basePrompt = "Base 1")
+        val settings = BotSettings(bots = listOf(bot1))
+
+        // Valid upsert
+        val settingsWithPrompt = CustomPromptOperations.upsertPrompt(settings, "1", "Custom 1")
+        assertEquals("Custom 1", settingsWithPrompt.customPrompts["1"])
+
+        // Blank key rejection
+        val settingsWithBlankKey = CustomPromptOperations.upsertPrompt(settings, "", "Custom 1")
+        assertEquals(emptyMap<String, String>(), settingsWithBlankKey.customPrompts)
+
+        // Blank prompt rejection
+        val settingsWithBlankPrompt = CustomPromptOperations.upsertPrompt(settings, "1", "  ")
+        assertEquals(emptyMap<String, String>(), settingsWithBlankPrompt.customPrompts)
+    }
+
+    @Test
+    fun testDeletePrompt() {
+        val bot1 = Bot(id = "1", name = "Bot 1")
+        val settings = BotSettings(
+            bots = listOf(bot1),
+            customPrompts = mapOf("1" to "Custom 1")
+        )
+
+        // Delete existing prompt
+        val settingsAfterDelete = CustomPromptOperations.deletePrompt(settings, "1")
+        assertEquals(emptyMap<String, String>(), settingsAfterDelete.customPrompts)
+
+        // Delete non-existent prompt
+        val settingsAfterDeletingNonExistent = CustomPromptOperations.deletePrompt(settings, "99")
+        assertEquals(1, settingsAfterDeletingNonExistent.customPrompts.size)
+    }
+
+    @Test
+    fun testGetPromptForBot() {
+        val bot1 = Bot(id = "1", name = "Bot 1", basePrompt = "Base 1")
+        val bot2 = Bot(id = "2", name = "Bot 2", basePrompt = "Base 2")
+        val settings = BotSettings(
+            bots = listOf(bot1, bot2),
+            customPrompts = mapOf("1" to "Custom 1")
+        )
+
+        // Custom prompt exists
+        assertEquals("Custom 1", CustomPromptOperations.getPromptForBot(settings, "1"))
+
+        // Fallback to base prompt
+        assertEquals("Base 2", CustomPromptOperations.getPromptForBot(settings, "2"))
+
+        // No bot found
+        assertEquals(null, CustomPromptOperations.getPromptForBot(settings, "3"))
+    }
 }

@@ -16,13 +16,14 @@ fun AccountSettingsSection(
 ) {
     Column(modifier = modifier) {
         ListItem(
-            headlineContent = { Text(text = endpointUrl) }
+            headlineContent = { Text("Endpoint URL") },
+            supportingContent = { Text(endpointUrl) }
         )
         Button(onClick = onSignOut) {
-            Text(text = "Sign out")
+            Text("Sign out")
         }
         Button(onClick = onBack) {
-            Text(text = "Back")
+            Text("Back")
         }
     }
 }
@@ -35,14 +36,14 @@ fun BotsSettingsSection(
 ) {
     Column(modifier = modifier) {
         if (botNames.isEmpty()) {
-            Text(text = "No bots available")
+            Text("No bots available")
         } else {
             botNames.forEach { name ->
-                ListItem(headlineContent = { Text(text = name) })
+                ListItem(headlineContent = { Text(name) })
             }
         }
         Button(onClick = onBack) {
-            Text(text = "Back")
+            Text("Back")
         }
     }
 }

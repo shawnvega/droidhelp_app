@@ -35,6 +35,7 @@ fun NotificationsSettingsSection(
 
 @Composable
 fun AppearanceSettingsSection(
+    selectedMode: ColorMode,
     onSelectMode: (ColorMode) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -42,6 +43,11 @@ fun AppearanceSettingsSection(
         ColorMode.entries.forEach { mode ->
             ListItem(
                 headlineContent = { Text(mode.name) },
+                supportingContent = if (mode == selectedMode) {
+                    { Text("Current mode") }
+                } else {
+                    null
+                },
                 modifier = Modifier.clickable { onSelectMode(mode) }
             )
         }

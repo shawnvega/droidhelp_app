@@ -88,23 +88,37 @@ Add android.sync.suppressAgpWarnings=LIBRARY_CONSTRAINTS_SHOULD_BE_DISABLED to t
 > Task :app:processDebugManifest UP-TO-DATE
 > Task :app:processDebugManifestForPackage UP-TO-DATE
 > Task :app:processDebugResources UP-TO-DATE
+> Task :app:compileDebugKotlin UP-TO-DATE
 > Task :app:javaPreCompileDebug UP-TO-DATE
+> Task :app:compileDebugJavaWithJavac NO-SOURCE
+> Task :app:bundleDebugClassesToRuntimeJar UP-TO-DATE
+> Task :app:bundleDebugClassesToCompileJar UP-TO-DATE
 > Task :app:preDebugUnitTestBuild UP-TO-DATE
 > Task :app:javaPreCompileDebugUnitTest UP-TO-DATE
+> Task :app:compressDebugJavaRes UP-TO-DATE
 
-> Task :app:compileDebugKotlin
-e: file:///opt/data/projects/droidhelp/app/src/main/java/com/bighelp/droidhelp/home/BotProfileScreen.kt:33:2 Unresolved reference 'Composable'.
-e: file:///opt/data/projects/droidhelp/app/src/main/java/com/bighelp/droidhelp/home/BotProfileScreen.kt:34:5 Functions which invoke @Composable functions must be marked with the @Composable annotation
-e: file:///opt/data/projects/droidhelp/app/src/main/java/com/bighelp/droidhelp/home/BotProfileScreen.kt:40:5 @Composable invocations can only happen from the context of a @Composable function
-e: file:///opt/data/projects/droidhelp/app/src/main/java/com/bighelp/droidhelp/home/BotProfileScreen.kt:56:13 Unresolved reference 'ScrollableTabRow'.
-e: file:///opt/data/projects/droidhelp/app/src/main/java/com/bighelp/droidhelp/home/BotProfileScreen.kt:61:21 @Composable invocations can only happen from the context of a @Composable function
-
-> Task :app:compileDebugKotlin FAILED
+> Task :app:compileDebugUnitTestKotlin FAILED
+e: file:///opt/data/projects/droidhelp/app/src/test/java/com/bighelp/droidhelp/settings/AppearanceSettingsTest.kt:18:24 Unresolved reference 'AppearanceSettings'.
+e: file:///opt/data/projects/droidhelp/app/src/test/java/com/bighelp/droidhelp/settings/AppearanceSettingsTest.kt:19:22 Unresolved reference 'AppearanceSettings'.
+e: file:///opt/data/projects/droidhelp/app/src/test/java/com/bighelp/droidhelp/settings/AppearanceSettingsTest.kt:19:81 Unresolved reference 'AppearanceSettings'.
+e: file:///opt/data/projects/droidhelp/app/src/test/java/com/bighelp/droidhelp/settings/AppearanceSettingsTest.kt:20:22 Unresolved reference 'AppearanceSettings'.
+e: file:///opt/data/projects/droidhelp/app/src/test/java/com/bighelp/droidhelp/settings/AppearanceSettingsTest.kt:20:81 Unresolved reference 'AppearanceSettings'.
+e: file:///opt/data/projects/droidhelp/app/src/test/java/com/bighelp/droidhelp/settings/AppearanceSettingsTest.kt:21:22 Unresolved reference 'AppearanceSettings'.
+e: file:///opt/data/projects/droidhelp/app/src/test/java/com/bighelp/droidhelp/settings/AppearanceSettingsTest.kt:22:22 Unresolved reference 'AppearanceSettings'.
+e: file:///opt/data/projects/droidhelp/app/src/test/java/com/bighelp/droidhelp/settings/AppearanceSettingsTest.kt:29:24 Unresolved reference 'AppearanceSettings'.
+e: file:///opt/data/projects/droidhelp/app/src/test/java/com/bighelp/droidhelp/settings/AppearanceSettingsTest.kt:30:22 Unresolved reference 'AppearanceSettings'.
+e: file:///opt/data/projects/droidhelp/app/src/test/java/com/bighelp/droidhelp/settings/AppearanceSettingsTest.kt:30:84 Cannot infer type for this parameter. Specify it explicitly.
+e: file:///opt/data/projects/droidhelp/app/src/test/java/com/bighelp/droidhelp/settings/AppearanceSettingsTest.kt:37:24 Unresolved reference 'AppearanceSettings'.
+e: file:///opt/data/projects/droidhelp/app/src/test/java/com/bighelp/droidhelp/settings/AppearanceSettingsTest.kt:43:22 Unresolved reference 'AppearanceSettings'.
+e: file:///opt/data/projects/droidhelp/app/src/test/java/com/bighelp/droidhelp/settings/AppearanceSettingsTest.kt:43:80 Cannot infer type for this parameter. Specify it explicitly.
+e: file:///opt/data/projects/droidhelp/app/src/test/java/com/bighelp/droidhelp/settings/AppearanceSettingsTest.kt:46:22 Unresolved reference 'AppearanceSettings'.
+e: file:///opt/data/projects/droidhelp/app/src/test/java/com/bighelp/droidhelp/settings/AppearanceSettingsTest.kt:46:80 Cannot infer type for this parameter. Specify it explicitly.
+e: file:///opt/data/projects/droidhelp/app/src/test/java/com/bighelp/droidhelp/settings/AppearanceSettingsTest.kt:53:24 Unresolved reference 'AppearanceSettings'.
 
 FAILURE: Build failed with an exception.
 
 * What went wrong:
-Execution failed for task ':app:compileDebugKotlin' (registered by plugin 'org.jetbrains.kotlin.android').
+Execution failed for task ':app:compileDebugUnitTestKotlin' (registered by plugin 'org.jetbrains.kotlin.android').
 > A failure occurred while executing org.jetbrains.kotlin.compilerRunner.GradleCompilerRunnerWithWorkers$GradleKotlinCompilerWorkAction
    > Compilation error. See log for more details
 
@@ -114,5 +128,5 @@ Execution failed for task ':app:compileDebugKotlin' (registered by plugin 'org.j
 > Run with --scan to get full insights from a Build Scan (powered by Develocity).
 > Get more help at https://help.gradle.org.
 
-BUILD FAILED in 25s
-18 actionable tasks: 1 executed, 17 up-to-date
+BUILD FAILED in 26s
+22 actionable tasks: 1 executed, 21 up-to-date

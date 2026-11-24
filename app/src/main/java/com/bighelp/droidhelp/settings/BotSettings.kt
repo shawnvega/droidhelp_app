@@ -68,3 +68,19 @@ object BotSettingsOperations {
         }
     }
 }
+
+object CustomPromptOperations {
+    fun upsertPrompt(settings: BotSettings, key: String, prompt: String): BotSettings {
+        if (key.isBlank() || prompt.isBlank()) return settings
+        return settings.copy(customPrompts = settings.customPrompts + (key to prompt))
+    }
+
+    fun deletePrompt(settings: BotSettings, key: String): BotSettings {
+        if (!settings.customPrompts.containsKey(key)) return settings
+        return settings.copy(customPrompts = settings.customPrompts - key)
+    }
+
+    fun getPromptForBot(settings: BotSettings, botId: String): String? {
+        return settings.customPrompts[botId] ?: settings.bots.find { it.id == botId }?.basePrompt
+    }
+}

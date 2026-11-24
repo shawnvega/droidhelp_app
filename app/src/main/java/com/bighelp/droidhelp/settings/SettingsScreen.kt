@@ -14,29 +14,75 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.viewmodel.compose.viewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
-    onSectionClick: (SettingsSection) -> Unit,
+    viewModel: SettingsViewModel = viewModel(),
     modifier: Modifier = Modifier
 ) {
+    val currentSection = viewModel.currentSection
+    val onBack = { viewModel.goBack() }
+
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text("Settings") })
+            TopAppBar(
+                title = { Text(currentSection?.title ?: "Settings") },
+                navigationIcon = if (currentSection != null) {
+                    {
+                        Button(onClick = onBack) {
+                            Text("Back")
+                        }
+                    }
+                } else {
+                    {}
+                }
+            )
         },
         modifier = modifier.fillMaxSize()
     ) { innerPadding ->
-        LazyColumn(
-            modifier = Modifier
-                .padding(innerPadding)
-                .fillMaxSize()
-        ) {
-            items(SettingsSection.entries) { section ->
-                ListItem(
-                    headlineContent = { Text(section.title) },
-                    modifier = Modifier.clickable { onSectionClick(section) }
-                )
+        if (currentSection != null) {
+            Column(modifier = Modifier.padding(innerPadding)) {
+                when (currentSection) {
+                    SettingsSection.ACCOUNT -> AccountSettingsSection(
+                        endpointUrl = viewModel.endpointUrl,
+                        onSignOut = { /* TODO */ },
+                        onBack = onBack
+                    )
+                    SettingsSection.BOTS -> BotsSettingsSection(
+                        botNames = viewModel.botNames,
+                        onBack = onBack
+                    )
+                    SettingsSection.NOTIFICATIONS -> NotificationsSettingsSection(
+                        pushEnabled = viewModel.pushEnabled,
+                        soundEnabled = viewModel.soundEnabled,
+                        onTogglePush = viewModel::togglePush,
+                        onToggleSound = viewModel::toggleSound
+                    )
+                    SettingsSection.APPEARANCE -> AppearanceSettingsSection(
+                        selectedMode = viewModel.selectedMode,
+                        onSelectMode = viewModel::selectMode
+                    )
+                    SettingsSection.PRIVACY -> PrivacySettingsSection()
+                    SettingsSection.STORAGE -> StorageSettingsSection(
+                        onClearCache = viewModel::clearCache
+                    )
+                    SettingsSection.ABOUT -> AboutSettingsSection()
+                }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .padding(innerPadding)
+                    .fillMaxSize()
+            ) {
+                items(SettingsSection.entries) { section ->
+                    ListItem(
+                        headlineContent = { Text(section.title) },
+                        modifier = Modifier.clickable { viewModel.selectSection(section) }
+                    )
+                }
             }
         }
     }
@@ -50,18 +96,4 @@ enum class SettingsSection(val title: String) {
     PRIVACY("Privacy"),
     STORAGE("Storage"),
     ABOUT("About")
-}
-
-@Composable
-fun SettingsSectionPlaceholder(
-    section: SettingsSection,
-    onBack: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Column(modifier = modifier) {
-        Text(text = section.title)
-        Button(onClick = onBack) {
-            Text("Back")
-        }
-    }
 }
