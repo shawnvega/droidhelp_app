@@ -23,8 +23,10 @@ class NotificationSettings(private val context: Context) {
     }
 
     val preferencesFlow: Flow<NotificationPreferences> = context.notificationDataStore.data.map { preferences ->
+        val push = preferences[PUSH_ENABLED_KEY] ?: true
+        println("DEBUG: pushEnabled = $push")
         NotificationPreferences(
-            pushEnabled = preferences[PUSH_ENABLED_KEY] ?: true,
+            pushEnabled = push,
             soundEnabled = preferences[SOUND_ENABLED_KEY] ?: true,
             vibrationEnabled = preferences[VIBRATION_ENABLED_KEY] ?: true
         )
