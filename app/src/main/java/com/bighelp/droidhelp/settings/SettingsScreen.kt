@@ -13,17 +13,24 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
-import androidx.lifecycle.viewmodel.compose.viewModel
+import com.bighelp.droidhelp.designsystem.ColorMode
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
-    viewModel: SettingsViewModel = viewModel(),
+    viewModel: SettingsViewModel,
+    onExit: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val currentSection = viewModel.currentSection
     val onBack = { viewModel.goBack() }
+
+    // Load settings when the screen enters the composition
+    LaunchedEffect(Unit) {
+        viewModel.loadSettings()
+    }
 
     Scaffold(
         topBar = {
@@ -51,7 +58,7 @@ fun SettingsScreen(
                         onBack = onBack
                     )
                     SettingsSection.BOTS -> BotsSettingsSection(
-                        botNames = viewModel.botNames,
+                        botNames = viewModel.botSettings.bots.map { it.name },
                         onBack = onBack
                     )
                     SettingsSection.NOTIFICATIONS -> NotificationsSettingsSection(
@@ -66,34 +73,31 @@ fun SettingsScreen(
                     )
                     SettingsSection.PRIVACY -> PrivacySettingsSection()
                     SettingsSection.STORAGE -> StorageSettingsSection(
-                        onClearCache = viewModel::clearCache
+                        cacheSize = viewModel.cacheSize,
+                        dataUsage = viewModel.dataUsage,
+                        onClearCache = viewModel::clearCache,
+                        onClearData = viewModel::clearData
                     )
-                    SettingsSection.ABOUT -> AboutSettingsSection()
+                    SettingsSection.ABOUT -> AboutScreen(onBack = onBack)
                 }
             }
         } else {
-            LazyColumn(
-                modifier = Modifier
-                    .padding(innerPadding)
-                    .fillMaxSize()
-            ) {
-                items(SettingsSection.entries) { section ->
-                    ListItem(
-                        headlineContent = { Text(section.title) },
-                        modifier = Modifier.clickable { viewModel.selectSection(section) }
-                    )
+            Column(modifier = Modifier.padding(innerPadding)) {
+                Button(onClick = onExit) {
+                    Text("Done")
+                }
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                ) {
+                    items(SettingsSection.entries) { section ->
+                        ListItem(
+                            headlineContent = { Text(section.title) },
+                            modifier = Modifier.clickable { viewModel.selectSection(section) }
+                        )
+                    }
                 }
             }
         }
     }
-}
-
-enum class SettingsSection(val title: String) {
-    ACCOUNT("Account"),
-    BOTS("Bots"),
-    NOTIFICATIONS("Notifications"),
-    APPEARANCE("Appearance"),
-    PRIVACY("Privacy"),
-    STORAGE("Storage"),
-    ABOUT("About")
 }

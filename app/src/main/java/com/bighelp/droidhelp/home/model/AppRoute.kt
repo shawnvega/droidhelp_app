@@ -8,4 +8,5 @@ sealed class AppRoute {
     object Projects : AppRoute()
     object Kanban : AppRoute()
     object Workflows : AppRoute()
+    object About : AppRoute()
 }

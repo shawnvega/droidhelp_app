@@ -8,6 +8,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.bighelp.droidhelp.app.AppState
 import com.bighelp.droidhelp.home.model.AppRoute
+import com.bighelp.droidhelp.settings.AboutScreen
 
 const val HOME_ROUTE = "home"
 
@@ -19,6 +20,7 @@ fun AppRoute.toRouteString(): String = when (this) {
     AppRoute.Projects -> "projects"
     AppRoute.Kanban -> "kanban"
     AppRoute.Workflows -> "workflows"
+    AppRoute.About -> "about"
 }
 
 fun navigateToRoute(navController: NavHostController, route: AppRoute) {
@@ -39,7 +41,8 @@ fun parseDeepLinkRoute(uriString: String): AppRoute? {
         "workspace_connections" to AppRoute.WorkspaceConnections,
         "projects" to AppRoute.Projects,
         "kanban" to AppRoute.Kanban,
-        "workflows" to AppRoute.Workflows
+        "workflows" to AppRoute.Workflows,
+        "about" to AppRoute.About
     )
 
     return if (uriString.startsWith(prefix) && path.isNotEmpty()) {
@@ -89,6 +92,9 @@ fun AppNavHost(
         }
         composable("workflows") {
             Text("workflows")
+        }
+        composable("about") {
+            AboutScreen(onBack = { navController.popBackStack() })
         }
     }
 }
